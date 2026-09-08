@@ -1,0 +1,93 @@
+Create folder "app"
+
+Create a Virtual Environment:
+
+python -m venv venv
+.\venv\Scripts\activate
+
+ Install FastAPI:
+ pip install "fastapi[standard]"
+
+ See the output if there any notations or new pip releases:
+ run:
+ Upgrade pip: python.exe -m pip install --upgrade pip
+
+
+
+ ////////////////////////////////////////////////////////
+
+ app/
+├── __init__.py
+├── main.py
+├── models.py
+├── config.py
+└── logging_config.py
+
+Purpose of each file:
+
+File	Responsibility
+main.py	FastAPI application and API endpoints
+models.py	Appointment request/response models
+config.py	Environment-based application configuration
+logging_config.py	Structured JSON logging configuration
+__init__.py	Marks app as a Python package
+
+/////////////////////////////////////////////////////////
+Open separate CMD and navigate to the Project Folder and to "app"  like D:\GitHub\FastApiArgoProject\app:
+run from app folder:
+
+cd /d D:\GitHub\FastApiArgoProject\app
+.venv\Scripts\activate.bat
+python -m uvicorn api.main:app --reload
+
+And server start to listen:
+Open Browser and check: http://127.0.0.1:8000/health
+
+//////////////////go up to the FastApiArgoProject folder and create there requirements.txt file and run ////////
+
+pip install -r requirements.txt
+
+////////////////////After added config.py and main.py we can test api //////////
+
+curl http://127.0.0.1:8000/ready
+response:
+#{"status":"ready","environment":"development"}
+
+we addded config.py option cause we want later to overwrite the config values ,try to overwrite them in powershell:
+
+You can also test environment configuration in PowerShell session:
+
+in cmd use: set "ENVIRONMENT=staging"
+Powershell use: $env:ENVIRONMENT = "staging"
+python -m uvicorn api.main:app --reload
+
+and in VS Terminal validate: (.venv) PS D:\GitHub\FastApiArgoProject> curl http://127.0.0.1:8000/ready
+{"status":"ready","environment":"staging"}
+
+////////////////////////////////////////////
+
+/docs is automatically generated API documentation created by FastAPI.
+
+http://127.0.0.1:8000/docs
+
+/////////////////////////////somtimes process is not been killed or stoped so kill it with //////
+
+
+Get-Process python |
+    Where-Object Path -Like "*FastApiArgoProject*" |
+    Stop-Process -Force
+
+//////////////////////For Debug do next //////////
+in .vscode folder  need to add launch.json and setting.json
+
+to run Debug click on the VS Code left side (vertical) Debuger and choose Run and Debug : Debug FastAPI
+
+In the code add in the lines where do you need breakpoints: debugpy.breakpoint()
+
+
+
+
+
+
+
+

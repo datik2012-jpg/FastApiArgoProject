@@ -1,0 +1,447 @@
+Azure DevOps GitOps Practice Project
+Project Goal
+
+Build and deploy a small Medical Appointment API using:
+
+Python FastAPI
+Docker
+Azure Container Registry
+Azure Kubernetes Service
+Terraform
+Kubernetes
+Helm
+Argo CD
+GitHub Actions
+Azure Key Vault
+Datadog
+
+The project should demonstrate infrastructure automation, CI/CD, GitOps, security, monitoring, troubleshooting, and rollback.
+
+Application
+
+Create a small FastAPI medical appointment service using synthetic test data.
+
+API endpoints
+GET  /health
+GET  /ready
+GET  /appointments
+GET  /appointments/{id}
+POST /appointments
+GET  /simulate-error
+Health endpoints
+/health confirms that the process is running.
+/ready confirms that the application is ready to receive traffic.
+/simulate-error returns HTTP 500 for monitoring and troubleshooting practice.
+Application requirements
+Structured JSON logging
+Environment-based configuration
+Unit tests with pytest
+Datadog APM tracing
+No real patient information
+Graceful error handling
+Repository Structure
+medical-aks-gitops/
+├── app/
+│   ├── main.py
+│   ├── models.py
+│   ├── config.py
+│   └── logging_config.py
+├── tests/
+│   └── test_api.py
+├── helm/
+│   └── medical-api/
+│       ├── Chart.yaml
+│       ├── values.yaml
+│       ├── values-dev.yaml
+│       ├── values-prod.yaml
+│       └── templates/
+│           ├── deployment.yaml
+│           ├── service.yaml
+│           ├── configmap.yaml
+│           ├── serviceaccount.yaml
+│           ├── secret-provider-class.yaml
+│           └── hpa.yaml
+├── argocd/
+│   ├── project.yaml
+│   ├── medical-api.yaml
+│   └── datadog.yaml
+├── terraform/
+│   ├── providers.tf
+│   ├── backend.tf
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   ├── acr.tf
+│   ├── aks.tf
+│   ├── key-vault.tf
+│   └── identities.tf
+├── .github/
+│   └── workflows/
+│       ├── ci.yaml
+│       └── terraform.yaml
+├── Dockerfile
+├── requirements.txt
+├── .dockerignore
+└── README.md
+Implementation Plan
+Phase 1 — FastAPI Application
+Tasks
+Create the FastAPI application.
+Add health and readiness endpoints.
+Add appointment endpoints.
+Add structured JSON logging.
+Add an endpoint that returns HTTP 500.
+Write pytest tests.
+Run the application locally.
+Verification
+pytest
+uvicorn app.main:app --reload
+curl http://localhost:8000/health
+curl http://localhost:8000/appointments
+Phase 2 — Docker
+Tasks
+Create a Dockerfile.
+Use a small Python base image.
+Run the container as a non-root user.
+Add a Docker health check.
+Build and run the image locally.
+Verification
+docker build -t medical-api:local .
+docker run -p 8000:8000 medical-api:local
+docker ps
+docker logs <container-id>
+Phase 3 — Kubernetes
+Tasks
+
+Create the following Kubernetes resources:
+
+Namespace
+Deployment
+Service
+ConfigMap
+ServiceAccount
+HorizontalPodAutoscaler
+
+Configure:
+
+Two application replicas
+RollingUpdate deployment strategy
+Liveness probe
+Readiness probe
+CPU and memory requests
+CPU and memory limits
+Pod labels
+Application environment variables
+Verification
+kubectl get nodes
+kubectl get pods
+kubectl get deployments
+kubectl get services
+kubectl describe pod <pod-name>
+kubectl logs <pod-name>
+kubectl rollout status deployment/medical-api
+Phase 4 — Helm
+Tasks
+Convert Kubernetes manifests into a Helm chart.
+Create separate values for development and production.
+Make the following configurable:
+image repository
+image tag
+replica count
+resources
+environment
+probes
+autoscaling
+Validate and render the chart.
+Verification
+helm lint helm/medical-api
+
+helm template medical-api helm/medical-api \
+  -f helm/medical-api/values-dev.yaml
+
+helm upgrade --install medical-api helm/medical-api \
+  -f helm/medical-api/values-dev.yaml
+Phase 5 — Azure Infrastructure with Terraform
+Azure resources
+Resource Group
+Azure Container Registry
+Azure Kubernetes Service
+Azure Key Vault
+Managed Identities
+Role Assignments
+Log Analytics Workspace, if required
+Security configuration
+AKS uses Managed Identity.
+AKS receives the AcrPull role for ACR.
+Workload Identity is enabled.
+OIDC issuer is enabled.
+Application secrets are stored in Key Vault.
+Secrets are never committed to Git.
+Terraform workflow
+az login
+az account show
+
+terraform init
+terraform fmt
+terraform validate
+terraform plan
+terraform apply
+AKS connection
+az aks get-credentials \
+  --resource-group <resource-group> \
+  --name <cluster-name>
+
+kubectl get nodes
+Phase 6 — Azure Container Registry
+Tasks
+Build the application image.
+Authenticate to ACR.
+Push the image.
+Verify that AKS can pull it.
+Commands
+az acr login --name <acr-name>
+
+docker build \
+  -t <acr-name>.azurecr.io/medical-api:v1.0.0 .
+
+docker push <acr-name>.azurecr.io/medical-api:v1.0.0
+Troubleshooting scenarios
+ImagePullBackOff
+Incorrect image tag
+Missing AcrPull permission
+Incorrect ACR hostname
+Container starts and crashes
+Missing environment variable
+Phase 7 — Argo CD
+Tasks
+Install Argo CD in AKS.
+Create an Argo CD AppProject.
+Create an Argo CD Application.
+Configure Helm as the deployment source.
+Enable automated synchronization.
+Argo CD synchronization policy
+syncPolicy:
+  automated:
+    prune: true
+    selfHeal: true
+  syncOptions:
+    - CreateNamespace=true
+Expected GitOps flow
+Code Change
+    ↓
+GitHub Actions
+    ↓
+Build Docker Image
+    ↓
+Push Image to ACR
+    ↓
+Update Helm Image Tag in Git
+    ↓
+Argo CD Detects Git Change
+    ↓
+Argo CD Deploys to AKS
+Practice scenarios
+Change the replica count manually with kubectl.
+Observe Argo CD reporting drift.
+Verify that selfHeal restores the Git configuration.
+Remove a resource from Git.
+Verify that prune removes it from AKS.
+Deploy an invalid image.
+Diagnose the failure.
+Roll back through Git.
+Phase 8 — GitHub Actions
+Pull request pipeline
+Checkout
+  ↓
+Install Dependencies
+  ↓
+Run Linting
+  ↓
+Run Tests
+  ↓
+Build Docker Image
+  ↓
+Validate Helm Chart
+  ↓
+Terraform Validate
+Main branch pipeline
+Checkout
+  ↓
+Tests
+  ↓
+Build Image
+  ↓
+Push Image to ACR
+  ↓
+Update Helm Image Tag
+  ↓
+Commit Change to GitOps Configuration
+  ↓
+Argo CD Deploys the Change
+Important principle
+
+GitHub Actions should not execute:
+
+kubectl apply
+
+GitHub Actions builds and publishes the image. Argo CD performs the deployment using the desired state stored in Git.
+
+Phase 9 — Azure Key Vault
+Tasks
+Store application secrets in Azure Key Vault.
+Enable AKS Workload Identity.
+Create a Kubernetes ServiceAccount.
+Create a federated identity.
+Give the application identity permission to read secrets.
+Mount the secrets using Secrets Store CSI Driver.
+Security goal
+Application Pod
+    ↓
+Kubernetes ServiceAccount
+    ↓
+Workload Identity
+    ↓
+Azure Key Vault
+
+No Azure client secret or Datadog API key should appear in:
+
+Git
+Docker image
+Helm values
+Kubernetes Deployment
+GitHub Actions logs
+Phase 10 — Datadog
+Installation
+
+Install the Datadog Agent in AKS through:
+
+Datadog Helm chart, or
+Datadog Operator
+
+For this project, begin with the Helm chart.
+
+Collect
+Infrastructure metrics
+Node CPU and memory
+Pod CPU and memory
+Pod availability
+Container restarts
+Deployment replicas
+Kubernetes events
+Application logs
+
+The application writes structured logs to:
+
+stdout
+stderr
+
+Datadog Agent collects the container logs.
+
+APM traces
+
+Add ddtrace to the Python application and trace:
+
+HTTP requests
+Request duration
+HTTP status codes
+Exceptions
+Service dependencies
+Standard tags
+service:medical-api
+env:dev
+version:v1.0.0
+team:platform
+
+These tags should be consistent across metrics, logs, and traces.
+
+Datadog Monitors
+
+Create monitors for:
+
+HTTP 5xx error rate is too high.
+P95 request latency is too high.
+Deployment has unavailable replicas.
+Container restart count increases.
+Pod enters CrashLoopBackOff.
+CPU usage is high.
+Memory usage is near the configured limit.
+No application data is received.
+Monitoring Test Scenario
+Deploy a healthy application.
+Send requests to /appointments.
+Verify requests in Datadog APM.
+Find the corresponding application logs.
+Call /simulate-error.
+Generate several HTTP 500 responses.
+Verify that the error-rate monitor triggers.
+Inspect the failing trace.
+Fix the application.
+Push the fix.
+Allow Argo CD to deploy it.
+Verify that the monitor recovers.
+Troubleshooting Practice
+Kubernetes
+
+Practice diagnosing:
+
+Pending
+FailedScheduling
+ImagePullBackOff
+CrashLoopBackOff
+OOMKilled
+0/1 Ready
+Failed liveness probe
+Failed readiness probe
+Missing ConfigMap
+Missing Secret
+Argo CD
+
+Practice diagnosing:
+
+OutOfSync
+Degraded
+Progressing
+Invalid Helm template
+Incorrect Git path
+Missing namespace
+Sync failure
+Drift between Git and AKS
+Azure
+
+Practice diagnosing:
+
+AKS cannot pull from ACR
+Missing role assignment
+Workload Identity failure
+Key Vault access denied
+Incorrect subscription
+Incorrect resource group
+Terraform state problems
+Datadog
+
+Practice diagnosing:
+
+Agent is not running
+Logs are not collected
+APM traces are missing
+Incorrect service, env, or version tags
+Monitor does not trigger
+Datadog API key is missing
+Final Demonstration
+
+The completed demo should show:
+
+Terraform creates the Azure infrastructure.
+GitHub Actions tests the application.
+GitHub Actions builds and pushes the image to ACR.
+GitHub Actions updates the image tag in Git.
+Argo CD detects the change.
+Argo CD deploys the application to AKS.
+Datadog receives metrics, logs, and traces.
+A simulated error triggers a Datadog monitor.
+A Git-based rollback restores the previous version.
+Argo CD corrects a manual Kubernetes change.
+Interview Explanation
+
+I provisioned the Azure infrastructure with Terraform, including AKS, ACR, Key Vault, managed identities, and role assignments. GitHub Actions runs tests, builds the Docker image, pushes it to ACR, and updates the image version in Git. Argo CD continuously reconciles the Helm configuration from Git and deploys it to AKS. Datadog collects Kubernetes metrics, container logs, and application traces. Application secrets are stored in Azure Key Vault and accessed using AKS Workload Identity.
+

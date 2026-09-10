@@ -14,6 +14,7 @@ Argo CD
 GitHub Actions
 Azure Key Vault
 Datadog
++ Agentic AI workflow automation and AI agent orchestration
 
 The project should demonstrate infrastructure automation, CI/CD, GitOps, security, monitoring, troubleshooting, and rollback.
 
@@ -41,7 +42,7 @@ No real patient information
 Graceful error handling
 Repository Structure
 medical-aks-gitops/
-├── app/
+├── app/api
 │   ├── main.py
 │   ├── models.py
 │   ├── config.py
@@ -445,3 +446,182 @@ Interview Explanation
 
 I provisioned the Azure infrastructure with Terraform, including AKS, ACR, Key Vault, managed identities, and role assignments. GitHub Actions runs tests, builds the Docker image, pushes it to ACR, and updates the image version in Git. Argo CD continuously reconciles the Helm configuration from Git and deploys it to AKS. Datadog collects Kubernetes metrics, container logs, and application traces. Application secrets are stored in Azure Key Vault and accessed using AKS Workload Identity.
 
+//////////////////////////////////Complete Project PLAN /////////////
+
+Complete Project Plan
+Phase 1 — FastAPI
+
+Build and test the Medical Appointment API.
+
+Phase 2 — Docker
+Create Dockerfile
+Use non-root user
+Build the image
+Run the container locally
+Add container health check
+Phase 3 — Kubernetes
+Deployment
+Service
+ConfigMap
+Liveness/readiness probes
+Resource requests and limits
+Horizontal Pod Autoscaler
+Phase 4 — Helm
+Convert Kubernetes YAML into a Helm chart
+Create dev and prod values
+Validate with helm lint
+Install and upgrade releases
+Practice rollback
+Phase 5 — Azure with Terraform
+
+Create:
+
+Resource Group
+Azure Container Registry
+AKS
+Key Vault
+Managed identities
+Role assignments
+Phase 6 — ACR
+Build the Docker image
+Push it to ACR
+Configure AKS with AcrPull
+Troubleshoot ImagePullBackOff
+Phase 7 — Argo CD
+Install Argo CD in AKS
+Create AppProject
+Create Application
+Enable prune
+Enable selfHeal
+Practice drift correction and rollback
+Phase 8 — GitHub Actions
+Run tests
+Build image
+Push image to ACR
+Update the Helm image tag in Git
+Let Argo CD deploy the change
+Phase 9 — Azure Key Vault
+Store secrets outside Git
+Enable AKS Workload Identity
+Mount secrets into the application
+Phase 10 — Datadog
+Install Datadog Agent
+Collect AKS metrics
+Collect JSON logs
+Enable APM tracing
+Create monitors for:
+HTTP 500 errors
+latency
+pod restarts
+unavailable replicas
+CPU and memory
+
+////////////////9/9/2026 /////////////
+
+
+Phase 1 — FastAPI application
+✅ FastAPI application
+✅ /health
+✅ /ready
+✅ Configuration with pydantic-settings
+✅ Appointment models
+✅ POST /appointments
+✅ GET /appointments
+✅ GET /appointments/{id}
+✅ 404 Appointment not found
+✅ Structured JSON logging
+✅ Request logging middleware
+✅ /simulate-error returning HTTP 500
+✅ Next: pytest tests
+⬜ Final local verification
+Complete Project Plan
+
+//////////////////////////////////////////////9/9/2026 Phase 2 - Docker /////////////
+
+Phase 2 — Docker
+Create .dockerignore.
+Create Dockerfile.
+Build the image.
+Run the container.
+Test /health and /appointments.
+Inspect container logs.
+Run as a non-root user.
+
+
+
+created docker file and run BUILD:
+
+PS D:\GitHub\FastApiArgoProject> docker build -t medical-api:1.0.0 .
+[+] Building 128.6s (12/12) FINISHED                                                               docker:desktop-linux
+ => [internal] load build definition from Dockerfile                                                               0.1s
+ => => transferring dockerfile: 667B                                                                               0.1s
+ => [internal] load metadata for docker.io/library/python:3.12-slim                                                2.1s
+ => [internal] load .dockerignore                                                                                  0.5s
+ => => transferring context: 567B                                                                                  0.2s
+ => CACHED [1/7] FROM docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565a  0.3s
+ => => resolve docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b5  0.2s
+ => [internal] load build context                                                                                 77.6s
+ => => transferring context: 61.37MB                                                                              77.2s
+ => [2/7] WORKDIR /app                                                                                             0.1s
+ => [3/7] COPY requirements.txt .                                                                                  0.7s
+ => [4/7] RUN pip install --no-cache-dir -r requirements.txt                                                      29.1s
+ => [5/7] COPY /app .                                                                                              1.5s
+ => [6/7] RUN addgroup --system appgroup     && adduser --system --ingroup appgroup appuser                        0.8s
+ => [7/7] COPY --chown=appuser:appgroup app/api ./api                                                              5.4s
+ => exporting to image                                                                                            10.4s
+ => => exporting layers                                                                                            4.9s
+ => => exporting manifest sha256:97c4fd3f4c37b3fb72aede97b4e16fe9c80660c245350b9470d3ba62ce5d664a                  0.1s
+ => => exporting config sha256:62bc133f0db52835128ed0c0c05997d1cf27f9ca2e8b7e70c858bd23d7c010d1                    0.0s
+ => => exporting attestation manifest sha256:fab10f49ebc6c5996c053afef23100a1ca1094663b6512226d9844d8f27057c2      0.1s
+ => => exporting manifest list sha256:869978aea982a2603880062f9610aa352289abfb857851a595180a11d15923cd             0.0s
+ => => naming to docker.io/library/medical-api:1.0.0                                                               0.0s
+ => => unpacking to docker.io/library/medical-api:1.0.0                                                            5.2s
+
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/20nyxuvw5e26azkx0jo2ytbhy
+Check in Docker Desktop - images: medical-api
+
+Mote: RUN Docker image + see the logs described at app-FastApi steps!!
+
+Great—Phase 2 is complete:
+
+Docker image built
+Container started
+Port 8000 exposed
+API verified
+Logs available through docker logs
+Health check working
+Application running as appuser
+
+//////////////////////////Phase 3 -k8s //////////////
+
+Next: Phase 3 — Kubernetes
+
+Next: Phase 3 — Kubernetes
+
+First, check whether Kubernetes is available:
+
+kubectl version --client
+kubectl config current-context
+kubectl get nodes
+
+If you use Docker Desktop, the context will usually be:
+
+docker-desktop
+
+If kubectl get nodes returns a node with Ready status, create this directory in the project root:
+
+FastApiArgoProject/
+└── k8s/
+
+We will add these manifests gradually:
+
+k8s/
+├── namespace.yaml
+├── deployment.yaml
+├── service.yaml
+├── configmap.yaml
+└── hpa.yaml
+
+Send the output of:
+
+kubectl get nodes -  to see nodes (and understand where will ne runnin ur cluster)

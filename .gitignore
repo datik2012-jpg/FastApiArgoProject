@@ -44,3 +44,42 @@ dist/
 build/
 *.egg-info/
 .eggs/
+
+# Local tools and agent state
+/app/curl
+/app/curl.exe
+.codex/
+.agents/
+
+# Credentials and private keys
+.aws/
+.azure/
+.kube/
+.docker/
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+kubeconfig
+kubeconfig.*
+secrets/
+secrets.yaml
+secrets.yml
+*.secrets.yaml
+*.secrets.yml
+
+# Terraform local state and potentially sensitive variable files
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Local application data
+*.db
+*.sqlite
+*.sqlite3

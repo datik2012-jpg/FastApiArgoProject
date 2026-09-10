@@ -34,7 +34,6 @@ __init__.py	Marks app as a Python package
 
 /////////////////////////////////////////////////////////
 Open separate CMD and navigate to the Project Folder and to "app"  like D:\GitHub\FastApiArgoProject\app:
-run from app folder:
 
 cd /d D:\GitHub\FastApiArgoProject\app
 .venv\Scripts\activate.bat
@@ -84,10 +83,278 @@ to run Debug click on the VS Code left side (vertical) Debuger and choose Run an
 
 In the code add in the lines where do you need breakpoints: debugpy.breakpoint()
 
+and only then click Green trinagle in the left side Debug FastAPI
+
+url will be opened with http://127.0.0.1:8002/docs and when you run API with a breakpoint which you put in the code it will stop VS code in this place.
+
+/////////////////////////////////////////////////////////////
+
+
+
+Build docker image open Powershell and chekc wsl --list + open Docker Destop:
+
+docker build -t medical-api:1.0.0 .
+
+after creation check : docker image list  - and see there medical-api image been created
+as well you can see Image in the Docker Desktop
+
+additional commands:
+docker run --name medical-api -p 8000:8000 medical-api:1.0.0
+
+
+health check:http://localhost:8000/health
+docs: http://localhost:8000/docs
+
+When container is running to see the logs we can run in separate powershell: docker logs -f medical-api
+
+or the same we can see in LOgs in Docker Desktop
+
+
+Open a shell inside the running container:
+
+and we can ispect dependency: python -m pip list
+or check: python -m pip check
+
+To exit from docker: exit or docker exec
+
+Test the API inside the container:
+docker exec medical-api python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode())"
+
+and we will see the repsonse from health: {"status": "healthy"}
+
+Port mapping(can be used when internal request works but from windows or browser fails):
+docker port medical-api
+
+To start the Docker and get inside imidetly:
+docker run --rm -it --entrypoint sh medical-api:1.0.0
+
+Use -d to run the container in the background:
+check docker ps -a  - check if there stopped containers and remove them
+docker rm medical-api  - remove container
+docker run -d --name medical-api -p 8000:8000 medical-api:1.0.0 - run in detach mode
+
+Verify that the application is not running as root:
+docker exec medical-api whoami - should be appuser
+
+connnect to detached container:
+docker exec -it medical-api sh
+
+docker stop medical-api
+docker rm medical-api
+
+/////////////////////////////////k8s //////////
 
 
 
 
+Your local Kubernetes cluster is ready:
+PS D:\GitHub\FastApiArgoProject> kubectl get nodes
+NAME             STATUS   ROLES           AGE   VERSION
+docker-desktop   Ready    control-plane   8d    v1.36.1
+
+check existing namespaces and current context:
+
+Meaning context is cluster which is provided by docker-desktop:
+PS D:\GitHub\FastApiArgoProject> kubectl config current-context
+docker-desktop
+
+Namespace group resources inside the cluster:
+PS D:\GitHub\FastApiArgoProject> kubectl get namespace
+NAME              STATUS   AGE
+default           Active   8d
+kube-node-lease   Active   8d
+kube-public       Active   8d
+kube-system       Active   8d
+task-platform     Active   8d
+
+To see the workloads in that project:
+kubectl get deployments,pods,services -n task-platform
+
+
+/////////////////////////
+
+create namespace.yaml and run the command:
+
+kubectl apply -f k8s/namespace.yaml
+
+and check all namespaces:
+
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f k8s/namespace.yaml
+namespace/medical-dev created
+PS D:\GitHub\FastApiArgoProject> kubectl get namespace
+NAME              STATUS   AGE
+default           Active   8d
+kube-node-lease   Active   8d
+kube-public       Active   8d
+kube-system       Active   8d
+medical-dev       Active   17s
+task-platform     Active   8d
+
+To verify what do we have in the current medical-dev namespace:
+kubectl get all -n medical-dev
+
+Create configmap.yaml and deployment.yaml and run:
+
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/deployment.yaml
+
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f k8s/configmap.yaml
+configmap/medical-api-config created
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f k8s/deployment.yaml
+deployment.apps/medical-api created
+
+Check:
+
+kubectl get deployments -n medical-dev
+kubectl get pods -n medical-dev
+
+Expected:
+
+NAME          READY   UP-TO-DATE   AVAILABLE
+medical-api   2/2     2            2
+
+
+If failed need to investigate:
+
+kubectl describe pod medical-api-65c9d455d7-9nmkd -n medical-dev
+
+If the pods are not Running, inspect them:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get pods -n medical-dev -w
+NAME                           READY   STATUS    RESTARTS   AGE
+medical-api-576b8d6578-t7lwl   1/1     Running   0          27s
+medical-api-576b8d6578-xrfm9   1/1     Running   0          19s
+
+
+kubectl describe pod -n medical-dev medical-api-576b8d6578-t7lwl
 
 
 
+Then verify:
+
+kubectl get deployment -n medical-dev
+
+PS D:\GitHub\FastApiArgoProject> kubectl get deployment -n medical-dev
+NAME          READY   UP-TO-DATE   AVAILABLE   AGE
+medical-api   2/2     2            2           10m
+
+See pods:
+PS D:\GitHub\FastApiArgoProject> kubectl get pods -n medical-dev
+NAME                           READY   STATUS    RESTARTS   AGE
+medical-api-576b8d6578-t7lwl   1/1     Running   0          4m2s
+medical-api-576b8d6578-xrfm9   1/1     Running   0          3m54s
+
+
+kubectl exec -n medical-dev deployment/medical-api -- id
+
+PS D:\GitHub\FastApiArgoProject> kubectl exec -n medical-dev deployment/medical-api -- id
+uid=10001(appuser) gid=10001(appgroup) groups=10001(appgroup)
+
+
+Also verify the environment variable:
+
+kubectl exec -n medical-dev deployment/medical-api -- printenv ENVIRONMENT
+
+PS D:\GitHub\FastApiArgoProject> kubectl exec -n medical-dev deployment/medical-api -- printenv ENVIRONMENT
+development
+//////////////////////////////
+
+Excellent—the Deployment is now healthy:
+
+READY:       2/2
+AVAILABLE:   2
+STATUS:      Running
+RESTARTS:    0
+
+This means Kubernetes successfully:
+
+created two Pods;
+started the containers;
+passed readiness probes;
+passed liveness probes;
+recognized the numeric non-root user.
+Next step — Kubernetes Service
+
+Pods have internal IPs that can change. A Service gives them one stable address and load-balances requests between them.
+
+IN Production we will use:
+
+In production AKS, the normal architecture is:
+
+Internet
+   ↓
+Azure Load Balancer / Application Gateway
+   ↓
+Ingress Controller
+   ↓
+ClusterIP Service
+   ↓
+Pods
+
+Meantime create service.yaml
+
+Apply it:
+
+kubectl apply -f k8s/service.yaml
+
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f k8s/service.yaml
+service/medical-api created
+
+Verify the Service and its endpoints:
+
+kubectl get service -n medical-dev
+
+We see now on which PORT is  SERVICE listening:
+PS D:\GitHub\FastApiArgoProject> kubectl get service -n medical-dev
+NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+medical-api   ClusterIP   10.108.76.243   <none>        80/TCP    15s
+
+kubectl get endpoints -n medical-dev
+
+
+We see now on which PORTs and API application is listening:
+PS D:\GitHub\FastApiArgoProject> kubectl get endpoints -n medical-dev
+Warning: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice
+NAME          ENDPOINTS                       AGE
+medical-api   10.1.0.40:8000,10.1.0.41:8000   34s
+
+Access it locally using port-forwarding:
+
+On windows we want to use port 8080 (cause docker container which we run before we want might be to keep so prefer to use new port 8080 on windows):
+
+
+kubectl port-forward -n medical-dev service/medical-api 8080:80
+
+
+Forwarding from 127.0.0.1:8080 -> 8000
+Forwarding from [::1]:8080 -> 8000
+
+
+
+Keep that terminal running. In another terminal:
+
+curl.exe http://127.0.0.1:8080/health
+curl.exe http://127.0.0.1:8080/appointments
+
+Expected:
+
+{"status":"healthy"}
+[]
+
+In case curl fails check endpoints:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get endpointslices -n medical-dev
+NAME                ADDRESSTYPE   PORTS   ENDPOINTS             AGE
+medical-api-7km6j   IPv4          8000    10.1.0.41,10.1.0.40   21m
+
+
+Notice that we use local port 8080 because port 8000 may still be occupied by the Docker container.
+
+Keep it in mind:
+
+However, our current API stores appointments in each Pod’s memory. That creates a problem:
+
+POST appointment → Pod 1 stores it
+GET appointments → Pod 2 may return []
+
+//////////////////////Next step — Horizontal Pod Autoscaler (HPA) ////////

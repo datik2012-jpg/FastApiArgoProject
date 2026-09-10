@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: medical-api
+  namespace: medical-dev
+spec:
+  type: ClusterIP
+
+  selector:
+    app: medical-api
+
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

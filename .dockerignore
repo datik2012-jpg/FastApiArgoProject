@@ -1,0 +1,7 @@
+# Only send files required by the Dockerfile to the build context.
+**
+!Dockerfile
+!requirements.txt
+!app/
+!app/api/
+!app/api/*.py

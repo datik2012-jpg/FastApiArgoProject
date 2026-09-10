@@ -1,0 +1,4 @@
+a)navigate in the terminal to the app folder
+b) activate ENVIRONMENT:  .\.venv\Scripts\Activate.ps1
+c) Install pytest: python -m pip install pytest
+d)run the test: python.exe -m pytest

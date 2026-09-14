@@ -75,9 +75,13 @@ secrets.yml
 *.tfstate
 *.tfstate.*
 *.tfplan
+*.tfplan.*
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+.terraformrc
+terraform.rc
+credentials.tfrc.json
 
 # Local application data
 *.db

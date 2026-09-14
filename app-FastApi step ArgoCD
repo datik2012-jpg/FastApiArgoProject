@@ -327,4 +327,48 @@ kubectl get deployment medical-api `
   -n medical-argocd `
   -o jsonpath="{.spec.template.spec.containers[0].resources.limits.memory}"
 
+PS D:\GitHub\FastApiArgoProject> kubectl get deployment medical-api `
+>>   -n medical-argocd `
+>>   -o jsonpath="{.spec.template.spec.containers[0].resources.limits.memory}"
+300Mi
+
+as well in ArgoCD UI -go to POD and see there:
+
+resources:
+        limits:
+          cpu: 500m
+          memory: 300Mi
+
+
+
+Now revert the change in the Github:
+
+
+first see the sync id is:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get application medical-api -n argocd `
+>>   -o jsonpath="{.status.sync.revision}"
+b7d733c4fe6cbe085a51dd70f319eeeb479358d1
+
+as well in UI is the same: Sync OK to b7d733c
+
+now do revert or push to the git change from 300 to 256mb.
+
+and do refresh which do SYNC:
+
+kubectl annotate application medical-api `
+  -n argocd `
+  argocd.argoproj.io/refresh=hard `
+  --overwrite
+
+  Now we back to 256mb - you can see the change in ArgoCD ui in the POD yaml 
+
+
+PS D:\GitHub\FastApiArgoProject> kubectl get deployment medical-api `
+>>   -n medical-argocd `
+>>   -o jsonpath="{.spec.template.spec.containers[0].resources.limits.memory}"
+256Mi
+
+
+
 

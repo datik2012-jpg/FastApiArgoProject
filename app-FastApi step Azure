@@ -1,0 +1,417 @@
+Check if Azure cli installed on machine:
+
+az version
+
+If not installed:
+
+Install Azure CLI using PowerShell:
+
+winget install --exact --id Microsoft.AzureCLI
+
+check the version:
+
+az version
+
+az Installation can impact ArgoCD runnning server and app so validate we are good:
+
+Confirm Argo CD server is healthy:
+kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server
+Start a new tunnel:
+
+kubectl port-forward service/argocd-server `
+  -n argocd `
+  8443:443 `
+  --address 127.0.0.1
+Open:
+
+https://127.0.0.1:8443
+
+///////////////////////////////////////////////////////////////
+
+
+Run:
+
+az login
+
+A browser window will open. Sign in to your Azure account.
+
+Then verify the selected subscription:
+
+az account show --output table
+
+Don’t paste the subscription ID here. Just confirm that the correct subscription name appears.
+
+After that, check Terraform:
+
+terraform version
+
+Then we’ll create the Azure Resource Group and ACR with Terraform.
+
+Validate Terraform ISntalled or Install it:
+
+winget install --exact --id Hashicorp.Terraform
+
+
+Verify (reload Powershell):
+
+terraform version
+
+///////////////////////////////////////
+
+Next, confirm Azure login without displaying your subscription ID:
+
+az account show --query "{Name:name, State:state}" --output table
+
+Then set the subscription ID only for the current PowerShell session:
+
+$env:ARM_SUBSCRIPTION_ID = az account show --query id --output tsv
+
+Do not put the subscription ID in Git.
+
+Create this directory:
+
+D:\GitHub\FastApiArgoProject\terraform
+
+Inside it, create providers.tf:
+
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+}
+
+Create providers.tf:
+
+provider "azurerm" {
+  features {}
+}
+
+Set the active subscription for Terraform without writing its ID into Git:
+
+$env:ARM_SUBSCRIPTION_ID = (az account show --query id --output tsv)
+
+Initialize Terraform:
+
+terraform init
+
+
+Initialize Terraform:
+
+cd D:\GitHub\FastApiArgoProject\terraform
+terraform init
+
+Terraform has been successfully initialized!
+
+////////////////////////////////////////////////
+
+Then validate:
+
+terraform fmt
+terraform validate
+
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform fmt
+PS D:\GitHub\FastApiArgoProject\terraform> terraform validate
+Success! The configuration is valid.
+
+
+//////////////////////////////////////////////
+
+
+Create variables.tf:
+
+variable "location" {
+  description = "Azure region for project resources"
+  type        = string
+  default     = "westeurope"
+}
+
+variable "environment" {
+  description = "Deployment environment"
+  type        = string
+  default     = "dev"
+}
+
+variable "project_name" {
+  description = "Project name used for Azure resources"
+  type        = string
+  default     = "medical-api"
+}
+
+Create main.tf:
+
+resource "azurerm_resource_group" "main" {
+  name     = "rg-${var.project_name}-${var.environment}"
+  location = var.location
+
+  tags = {
+    project     = var.project_name
+    environment = var.environment
+    managed_by  = "terraform"
+  }
+}
+
+Create outputs.tf:
+
+output "resource_group_name" {
+  description = "Created Azure Resource Group name"
+  value       = azurerm_resource_group.main.name
+}
+
+output "resource_group_location" {
+  description = "Azure Resource Group location"
+  value       = azurerm_resource_group.main.location
+}
+
+
+Format and validate:
+
+terraform fmt
+terraform validate
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform fmt
+PS D:\GitHub\FastApiArgoProject\terraform> terraform validate
+Success! The configuration is valid.
+
+Preview without creating anything:
+
+terraform plan   - which will create resource group (at the moment what we have in the main)
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + resource_group_location = "westeurope"
+  + resource_group_name     = "rg-medical-api-dev"
+
+  ////////////////////////////////////////////
+
+  Apply it:
+
+terraform apply
+
+
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+resource_group_location = "westeurope"
+resource_group_name = "rg-medical-api-dev"
+
+
+Verify through Terraform:
+
+terraform output
+terraform state list
+
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform output
+resource_group_location = "westeurope"
+resource_group_name = "rg-medical-api-dev"
+PS D:\GitHub\FastApiArgoProject\terraform> terraform state list
+azurerm_resource_group.main
+
+
+Verify through Azure CLI:
+
+az group show `
+  --name rg-medical-api-dev `
+  --output table
+
+  PS D:\GitHub\FastApiArgoProject\terraform> az group show `
+>>   --name rg-medical-api-dev `
+>>   --output table
+Location    Name
+----------  ------------------
+westeurope  rg-medical-api-dev
+
+///////////////////////////////////// Azure ACR - registry for images////////
+
+add random provider:
+
+random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6, < 4.0"
+    }
+
+and create acr.tf 
+
+
+and add to the outputs.tf:
+
+output "acr_name" {
+  description = "Azure Container Registry name"
+  value       = azurerm_container_registry.main.name
+}
+
+output "acr_login_server" {
+  description = "Azure Container Registry login server"
+  value       = azurerm_container_registry.main.login_server
+}
+
+Initialize and preview:
+
+terraform init -upgrade
+
+Terraform has been successfully initialized!
+
+You may now begin working with Terraform. Try running "terraform plan" to see
+any changes that are required for your infrastructure. All Terraform commands
+should now work.
+
+If you ever set or change modules or backend configuration for Terraform,
+rerun this command to reinitialize your working directory. If you forget, other
+commands will detect it and remind you to do so if necessary.
+
+terraform fmt
+terraform validate
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform validate
+Success! The configuration is valid.
+
+
+terraform plan
+
+Plan: 2 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + acr_login_server        = (known after apply)
+  + acr_name                = (known after apply)
+
+  
+  
+The two additions should be:
+
+random_string.acr_suffix
+azurerm_container_registry.main
+
+
+
+Then apply:
+
+terraform apply
+
+Enter:
+
+yes
+
+
+
+Outputs:
+
+acr_login_server = "medicalapixxxxxxxxxx"
+acr_name = "medicaxxxxxxxx"
+resource_group_location = "westeurope"
+resource_group_name = "rg-medical-api-dev"
+
+After creation, verify:
+
+terraform output acr_name
+terraform output acr_login_server
+az acr list --resource-group rg-medical-api-dev --output table
+
+Don’t paste any credentials. The registry name and login server are not secrets. Next, we’ll authenticate to ACR and push medical-api:1.0.1.
+
+
+//////////////////////////////////////
+
+
+Now push your local Docker image to it.
+
+$acrName = terraform output -raw acr_name
+$acrServer = terraform output -raw acr_login_server
+
+PS D:\GitHub\FastApiArgoProject\terraform> $acrName = terraform output -raw acr_name
+PS D:\GitHub\FastApiArgoProject\terraform> $acrServer = terraform output -raw acr_login_server
+
+Log in:
+PS D:\GitHub\FastApiArgoProject\terraform> az acr login --name $acrName
+Login Succeeded
+
+Verify the local image exists:
+
+docker images medical-api
+
+PS D:\GitHub\FastApiArgoProject\terraform> docker images medical-api
+                                                                                                                                                    i Info →   U  In Use
+IMAGE               ID             DISK USAGE   CONTENT SIZE   EXTRA
+medical-api:1.0.0   7ae1a839783c        384MB         88.9MB
+medical-api:1.0.1   0e1fb09bcc47        384MB         88.9MB    U
+
+Tag it with the ACR address:
+
+docker tag medical-api:1.0.1 "$acrServer/medical-api:1.0.1"
+
+
+Push it:
+
+docker push "$acrServer/medical-api:1.0.1"
+
+Now log in and push:
+
+az acr login --name $acrName
+docker push "$acrServer/medical-api:1.0.1"
+
+Login Succeeded
+dbd0b7849e6c: Pushed
+6310eb16bf42: Pushed
+44136fa355b3: Pushed
+1560cfed01dc: Pushed
+6310eb16bf42: Pushing [===>                                               ]  2.097MB/29.79MB
+3033d38816f7: Pushed
+1560cfed01dc: Pushing [====>                                              ]  1.049MB/12.12MB
+ae09afa74b35: Pushed
+778892a3e4ba: Pushed
+22c84f15e9ab: Pushed
+1.0.1: digest: sha256:163b08255c8261813a6436a4fc8d2adadadada size: 856
+
+
+
+Then verify:
+
+az acr repository list `
+  --name $acrName `
+  --output table
+
+
+PS D:\GitHub\FastApiArgoProject\terraform> az acr repository list `
+>>   --name $acrName `
+>>   --output table
+Result
+-----------
+medical-api
+
+
+
+
+Expected:
+
+Result
+-----------
+medical-api
+
+and:
+
+Result
+------
+1.0.1
+
+PS D:\GitHub\FastApiArgoProject\terraform> az acr repository show-tags `
+>>   --name $acrName `
+>>   --repository medical-api `
+>>   --output table
+Result
+--------
+1.0.1
+
+ACR does not create a repository when you create the registry or run docker tag; the repository appears after the first successful docker push.
+
+Note: ACR cannot be paused and may continue generating a small Basic-tier charge. We’ll remove all Azure resources with terraform destroy when the Azure practice is finished.

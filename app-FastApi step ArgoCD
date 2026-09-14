@@ -306,3 +306,25 @@ Revert through Git—not helm rollback.
 This demonstrates the actual workflow the medical company is likely using.
 
 
+Force Argo CD to refresh immediately:
+
+kubectl annotate application medical-api `
+  -n argocd `
+  argocd.argoproj.io/refresh=hard `
+  --overwrite
+
+Watch the GitOps deployment:
+
+kubectl get application medical-api -n argocd -w
+
+In another terminal:
+
+kubectl get pods -n medical-argocd -w
+
+Verify the Argo-managed Deployment—not the older medical-helm Deployment:
+
+kubectl get deployment medical-api `
+  -n medical-argocd `
+  -o jsonpath="{.spec.template.spec.containers[0].resources.limits.memory}"
+
+

@@ -1,0 +1,308 @@
+In a larger company, Argo CD may run in a separate management AKS cluster and deploy to several other clusters. For our take-home-sized project, running Argo CD in the same AKS cluster is acceptable.
+
+Next we will install it locally first:
+
+Namespace: argocd
+Argo CD components: local Docker Desktop cluster
+Medical application target: medical-argocd namespace
+Source: your GitHub repository
+
+Once this works, moving it to AKS will use nearly the same Application manifest. Only the image repository, credentials, ingress, and Azure-specific configuration will change.
+
+
+For the actual architecture:
+
+GitHub repository
+       ↓
+Argo CD running in AKS
+       ↓
+Helm chart
+       ↓
+Medical API Pods in AKS
+////////////////////////////////////////////////////////
+
+Argo CD — Step 1: Install Locally
+
+First verify the cluster:
+
+kubectl get nodes
+
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get nodes
+NAME             STATUS   ROLES           AGE   VERSION
+docker-desktop   Ready    control-plane   13d   v1.36.1
+
+
+Create the Argo CD namespace:
+
+kubectl create namespace argocd
+
+Install Argo CD using the official manifest:
+
+kubectl apply -n argocd `
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+  Verify:
+
+kubectl get pods -n argocd
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get pods -n argocd
+NAME                                                READY   STATUS    RESTARTS   AGE
+argocd-application-controller-0                     1/1     Running   0          2m3s
+argocd-applicationset-controller-84549767db-ss2xg   1/1     Running   0          2m4s
+argocd-dex-server-6cc5dd7c9d-2vplc                  1/1     Running   0          2m4s
+argocd-notifications-controller-57d4c66f69-79p4b    1/1     Running   0          2m4s
+argocd-redis-c55679569-p5hfq                        1/1     Running   0          2m4s
+argocd-repo-server-7f9fdfbb74-4hpf6                 1/1     Running   0          2m4s
+argocd-server-5f785dd555-84mzj                      1/1     Running   0          2m4s
+
+
+
+Also check Services:
+
+kubectl get services -n argocd
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get services -n argocd
+NAME                                      TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)                      AGE
+argocd-applicationset-controller          ClusterIP   10.110.118.252   <none>        7000/TCP,8080/TCP            3m42s
+argocd-dex-server                         ClusterIP   10.109.237.214   <none>        5556/TCP,5557/TCP,5558/TCP   3m42s
+argocd-metrics                            ClusterIP   10.100.220.223   <none>        8082/TCP                     3m42s
+argocd-notifications-controller-metrics   ClusterIP   10.99.10.175     <none>        9001/TCP                     3m41s
+argocd-redis                              ClusterIP   10.102.246.55    <none>        6379/TCP                     3m41s
+argocd-repo-server                        ClusterIP   10.103.10.104    <none>        8081/TCP,8084/TCP            3m41s
+argocd-server                             ClusterIP   10.109.93.172    <none>        80/TCP,443/TCP               3m41s
+argocd-server-metrics                     ClusterIP   10.108.230.109   <none>        8083/TCP
+
+///////////////////////////////////////////////////////////
+
+Open ArgoCD UI:
+
+Step 2 — Open Argo CD UI
+
+In Terminal 1, start port-forwarding:
+
+kubectl port-forward service/argocd-server `
+  -n argocd `
+  8443:443
+
+and open: https://127.0.0.1:8443
+
+
+he browser may show a certificate warning because local Argo CD uses a self-signed certificate. That is expected for this local environment.
+
+Get the initial password
+
+In Terminal 2:
+
+$encodedPassword = kubectl get secret argocd-initial-admin-secret `
+  -n argocd `
+  -o jsonpath="{.data.password}"
+
+[Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String($encodedPassword)
+)
+
+Login details:
+
+Username: admin
+Password: output from the command
+
+Do not paste the password here or commit it to Git.
+
+After logging in, the Argo CD screen will be empty because no Application has been created yet.
+
+Next, we need to confirm that FastApiArgoProject is pushed to GitHub and determine whether the repository is public or private. Then Argo CD can read the Helm chart from Git.
+
+//////////////////////////////////////////////
+
+Good. Next we need the repository URL and branch for the Argo CD Application.
+
+From the project root, run:
+
+cd D:\GitHub\FastApiArgoProject
+
+git remote -v
+
+PS D:\GitHub\FastApiArgoProject> git remote -v
+origin  https://github.com/datik2012-jpg/FastApiArgoProject.git (fetch)
+origin  https://github.com/datik2012-jpg/FastApiArgoProject.git (push)
+
+git branch --show-current
+
+PS D:\GitHub\FastApiArgoProject> git branch --show-current
+main
+
+git status --short
+
+PS D:\GitHub\FastApiArgoProject> git status --short
+?? "app-FastApi step ArgoCD"   - this is untracjed text file with my notes
+
+////////////////////////
+
+
+Create:
+
+D:\GitHub\FastApiArgoProject\argocd\medical-api-application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: medical-api
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/datik2012-jpg/FastApiArgoProject.git
+    targetRevision: main
+    path: helm/medical-api
+
+    helm:
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: medical-argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+    syncOptions:
+      - CreateNamespace=true
+
+
+
+
+Commit only the project configuration:
+
+git add helm argocd
+git commit -m "Add Argo CD application"
+git push origin main
+
+////////////////////////////RUN the ArgoCD application ///////////
+
+Then bootstrap the Argo CD Application:
+
+kubectl apply -f argocd/medical-api-application.yaml
+
+
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f argocd/medical-api-application.yaml
+application.argoproj.io/medical-api created
+
+NO you can see in ArgoCD ui appeared new Application: medical-api !!!!
+
+
+/////////////////////////Verify /////
+
+Verify:
+
+kubectl get applications -n argocd
+
+PS D:\GitHub\FastApiArgoProject> kubectl get applications -n argocd
+NAME          SYNC STATUS   HEALTH STATUS
+medical-api   Synced        Healthy
+
+kubectl get pods -n medical-argocd
+
+
+PS D:\GitHub\FastApiArgoProject> kubectl get pods -n medical-argocd
+NAME                          READY   STATUS    RESTARTS   AGE
+medical-api-656d897bf-4gtg2   1/1     Running   0          3m18s
+
+Excellent—Argo CD GitOps deployment is working:
+
+Git status:        Synced
+Application:       Healthy
+Pod:               Running
+Target namespace:  medical-argocd
+
+//////////////////////////////////////////////////
+
+Argo CD read the Helm chart from GitHub, rendered it, and deployed it without you running helm upgrade
+
+Next — Test selfHeal
+
+First check the Git-defined value:
+
+kubectl get configmap medical-api-config `
+  -n medical-argocd `
+  -o jsonpath="{.data.ENVIRONMENT}"
+
+  PS D:\GitHub\FastApiArgoProject> kubectl get pods -n medical-argocd
+NAME                          READY   STATUS    RESTARTS   AGE
+medical-api-656d897bf-4gtg2   1/1     Running   0          3m18s
+PS D:\GitHub\FastApiArgoProject> kubectl get configmap medical-api-config `
+>>   -n medical-argocd `
+>>   -o jsonpath="{.data.ENVIRONMENT}"
+development
+
+//////////////////////////////////Try to do a frift !!!! //////
+
+
+
+Now manually create drift:
+
+$env:KUBE_EDITOR = "notepad"
+kubectl edit configmap medical-api-config -n medical-argocd
+
+Change:
+
+ENVIRONMENT: development
+
+to:
+
+ENVIRONMENT: manual-change
+
+Save and close Notepad.
+
+
+Check immediately:
+
+kubectl get configmap medical-api-config `
+  -n medical-argocd `
+  -o jsonpath="{.data.ENVIRONMENT}"
+
+Argo CD may briefly show OutOfSync, then selfHeal: true should restore:
+
+development
+
+Watch application state or in ArgoCD UI:
+
+kubectl get application medical-api -n argocd -w
+
+PS D:\GitHub\FastApiArgoProject> kubectl get application medical-api -n argocd -w
+NAME          SYNC STATUS   HEALTH STATUS
+medical-api   Synced        Healthy
+
+This demonstrates the core GitOps rule:
+
+Manual cluster change
+        ↓
+Live state differs from Git
+        ↓
+Argo CD detects drift
+        ↓
+selfHeal restores Git state
+
+Do this test only in medical-argocd; the older medical-dev and medical-helm environments are not managed by Argo CD.
+
+/////////////////////////////////////Try Do Next - from Git ///////
+
+Great—selfHeal is confirmed.
+
+Next we’ll test a real GitOps deployment:
+
+Change the memory limit in values.yaml.
+Commit and push to GitHub.
+Argo CD detects the commit.
+Argo CD updates the Deployment.
+Kubernetes replaces the Pod.
+Revert through Git—not helm rollback.
+
+This demonstrates the actual workflow the medical company is likely using.
+
+

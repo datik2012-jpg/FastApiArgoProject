@@ -1,0 +1,703 @@
+Helm steps:
+
+Check if Helm Installed :
+
+helm version
+
+Install Helm using Windows Package Manager.
+
+First, find the available package:
+
+winget search Helm
+
+
+PS C:\Users\User> winget search Helm
+Name       Id                       Version Match            Source
+-------------------------------------------------------------------
+Helm       Helm.Helm                4.3.0                    winget
+Helm       MattTytel.Helm           0.9.0.0                  winget
+Flux       FluxCD.Flux              2.9.5   Tag: helm        winget
+vcluster   loft-sh.vcluster         0.36.1  Tag: helm        winget
+NebCLI     nebinfra.nebcli          6.17.1  Tag: helm        winget
+okteto     okteto.okteto            3.23.1  Tag: helm        winget
+Radar      skyhook-io.Radar         1.13.1  Tag: helm        winget
+GadgetPack HelmutBuhler.8GadgetPack 43.0.0                   winget
+Adressen   WilhelmHappe.Adressen    1.2.8.0                  winget
+NetRadio   WilhelmHappe.NetRadio    2.5.6.0                  winget
+KubeLinter stackrox.kube-linter     0.8.3   Tag: helm-charts winget
+
+Then install the official Helm CLI package:
+
+winget install --id Helm.Helm --exact
+
+Close and reopen PowerShell so Windows reloads PATH, then verify:
+
+helm version
+
+PS C:\Users\User> helm version
+version.BuildInfo{Version:"v4.3.0", GitCommit:"bec5b06ed841fe5269972d864d5177944fd5970f", GitTreeState:"clean", GoVersion:"go1.27.1", KubeClientVersion:"v1.37"}
+
+
+Also verify Helm can access Kubernetes:
+
+helm list -A
+
+Helm is only a client program on your computer. It uses the same Kubernetes context as kubectl:
+
+Helm CLI → kubeconfig → docker-desktop cluster
+Now create the chart from your project root:
+
+
+PS D:\GitHub\FastApiArgoProject> New-Item -ItemType Directory -Force helm
+
+
+    Directory: D:\GitHub\FastApiArgoProject
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d-----         9/14/2026  10:50 AM                helm
+
+PS D:\GitHub\FastApiArgoProject> Get-ChildItem helm/medical-api -Recurse
+
+Create the chart but before CD helm  folder and from there:
+
+helm create medical-api
+
+
+Create the chart:
+
+helm create medical-api
+
+Expected output:
+
+Creating medical-api  
+
+and will be created project and folders in helm folder
+
+
+Now verify:
+
+Get-ChildItem .\medical-api
+
+PS D:\GitHub\FastApiArgoProject\helm> Get-ChildItem .\medical-api
+
+
+    Directory: D:\GitHub\FastApiArgoProject\helm\medical-api
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d-----         9/14/2026  10:52 AM                charts
+d-----         9/14/2026  10:52 AM                templates
+-a----         9/14/2026  10:52 AM            349 .helmignore
+-a----         9/14/2026  10:52 AM           1147 Chart.yaml
+-a----         9/14/2026  10:52 AM           5277 values.yaml
+
+///////////////////////////////////////////////////////////////////
+
+
+
+Perfect—the Helm chart was created successfully.
+
+The generated chart contains more files than our project currently needs. We’ll simplify it and rebuild the templates from our working Kubernetes manifests.
+
+Step 1 — Remove generic templates
+
+From:
+
+D:\GitHub\FastApiArgoProject\helm
+
+remove only the generated templates:
+
+Remove-Item .\medical-api\templates\deployment.yaml
+Remove-Item .\medical-api\templates\service.yaml
+Remove-Item .\medical-api\templates\serviceaccount.yaml
+Remove-Item .\medical-api\templates\hpa.yaml
+Remove-Item .\medical-api\templates\ingress.yaml
+Remove-Item .\medical-api\templates\httproute.yaml
+Remove-Item .\medical-api\templates\NOTES.txt
+Remove-Item .\medical-api\templates\tests -Recurse
+
+Keep:
+
+_helpers.tpl
+
+////////////////////////////we need to copy from k8s folder ///////
+
+configmap.yaml
+deployment.yaml
+hpa.yaml
+service.yaml
+
+and the do there modification to use values from Values.yaml 
+
+///////////////////////////////////
+
+
+
+Step 2 — Replace Chart.yaml
+
+Use:
+
+apiVersion: v2
+
+name: medical-api
+
+description: Helm chart for the Medical Appointment API
+
+type: application
+
+version: 0.1.0
+
+appVersion: "1.0.1"
+
+
+The two versions mean different things:
+
+version:    version of the Helm chart
+appVersion: version of our FastAPI application
+
+//////////////////////////////////////////////
+
+
+Step 3 — Replace values.yaml
+
+Use:
+
+replicaCount: 1
+
+image:
+  repository: medical-api
+  tag: "1.0.1"
+  pullPolicy: Never
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+config:
+  appName: "Medical Appointment API"
+  appVersion: "1.0.1"
+  environment: "development"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+probes:
+  readiness:
+    path: /ready
+    initialDelaySeconds: 3
+    periodSeconds: 5
+
+  liveness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 60
+
+
+  //////////////////
+
+Next we’ll create templates/configmap.yaml.
+
+Helm Step 1 — ConfigMap Template
+
+Create:
+
+D:\GitHub\FastApiArgoProject\helm\medical-api\templates\configmap.yaml
+
+add:
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "medical-api.fullname" . }}-config
+  labels:
+    {{- include "medical-api.labels" . | nindent 4 }}
+data:
+  APP_NAME: {{ .Values.config.appName | quote }}
+  APP_VERSION: {{ .Values.config.appVersion | quote }}
+  ENVIRONMENT: {{ .Values.config.environment | quote }}
+
+
+
+The template reads values from values.yaml:
+
+.Values.config.appName
+        ↓
+config:
+  appName: "Medical Appointment API"
+
+  mportant Helm syntax:
+
+{{ ... }} — evaluate a Helm expression.
+.Values — values loaded from values.yaml.
+quote — surround the result with quotes.
+include — call a reusable helper from _helpers.tpl.
+nindent 4 — insert a newline and indent by four spaces.
+
+We don’t hardcode namespace: medical-dev. Helm will use the namespace supplied during installation.
+
+Now validate the chart from the helm directory:
+
+helm lint .\medical-api
+
+PS D:\GitHub\FastApiArgoProject\helm> helm lint .\medical-api
+==> Linting .\medical-api
+[INFO] Chart.yaml: icon is recommended
+
+1 chart(s) linted, 0 chart(s) failed
+
+The icon message is only a recommendation. You don’t need to fix it.
+
+Next — Render the YAML
+
+Before installing, inspect what Helm will generate:
+
+helm template medical-api .\medical-api `
+  --namespace medical-helm
+
+
+  PS D:\GitHub\FastApiArgoProject\helm> helm template medical-api .\medical-api `
+>>   --namespace medical-helm
+---
+# Source: medical-api/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medical-api-config
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  APP_NAME: "Medical Appointment API"
+  APP_VERSION: "1.0.1"
+  ENVIRONMENT: "development"
+
+  To save the generated YAML:
+
+helm template medical-api .\medical-api `
+  --namespace medical-helm `
+  > rendered.yaml
+
+Check rendered.yaml  contains:
+
+ConfigMap
+Deployment
+Service
+HPA
+correct image medical-api:1.0.1
+correct probes and resources
+
+//////////////////
+
+You don’t need to add namespace: medical-helm manually
+
+That you need to check is that your templates do not hardcode the old namespace:
+
+namespace: medical-dev
+
+Search the rendered file:
+
+Select-String -Path rendered.yaml -Pattern "namespace:"
+
+Possible results:
+
+No result — good
+
+///////////////////////////////
+
+Install Helm version:
+
+helm upgrade --install medical-api .\medical-api `
+  --namespace medical-helm `
+  --create-namespace
+
+
+
+PS D:\GitHub\FastApiArgoProject\helm> helm upgrade --install medical-api .\medical-api `
+>>   --namespace medical-helm `
+>>   --create-namespace
+Release "medical-api" does not exist. Installing it now.
+NAME: medical-api
+LAST DEPLOYED: Mon Sep 14 11:25:35 2026
+NAMESPACE: medical-helm
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+
+
+Now verify the resources:
+
+helm list -n medical-helm
+
+PS D:\GitHub\FastApiArgoProject\helm> helm list -n medical-helm
+NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART                   APP VERSION
+medical-api     medical-helm    1               2026-09-14 11:25:35.5012233 +0300 IDT   deployed        medical-api-0.1.0       1.0.1
+
+kubectl get deployment,pods,service,hpa,configmap -n medical-helm
+
+and we can see it deployed (as well in Docker Dekstop) only configmap and kube-root-ca:
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get deployment,pods,service,hpa,configmap -n medical-helm
+NAME                           DATA   AGE
+configmap/kube-root-ca.crt     1      3m25s
+configmap/medical-api-config   3      3m25s
+
+Helm installed successfully, but it appears that only the ConfigMap was created. Deployment, Service, and HPA are missing.
+we need investigate
+
+PS D:\GitHub\FastApiArgoProject\helm> helm get manifest medical-api -n medical-helm
+---
+# Source: medical-api/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medical-api-config
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  APP_NAME: "Medical Appointment API"
+  APP_VERSION: "1.0.1"
+  ENVIRONMENT: "development"
+
+
+
+  This confirms the cause: Helm rendered only configmap.yaml. Therefore, it created only the ConfigMap.
+
+The Deployment, Service, and HPA templates are either missing, empty, or outside the templates directory.
+
+Run:
+
+Get-ChildItem .\medical-api\templates
+
+PS D:\GitHub\FastApiArgoProject\helm> Get-ChildItem .\medical-api\templates
+
+
+    Directory: D:\GitHub\FastApiArgoProject\helm\medical-api\templates
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         9/14/2026  11:09 AM            333 configmap.yaml
+-a----         9/14/2026  10:52 AM           1822 _helpers.tpl
+
+///////////////////////ONLY NOW WHEN MOIDFIED ALL copied yamls (deployement,config,hpa,service) we can run the steps ///////
+
+
+First validate the chart:
+
+helm lint .\medical-api
+
+
+PS D:\GitHub\FastApiArgoProject\helm> helm lint .\medical-api
+==> Linting .\medical-api
+[INFO] Chart.yaml: icon is recommended
+
+1 chart(s) linted, 0 chart(s) failed
+
+
+
+Now preview all generated Kubernetes YAML:
+
+helm template medical-api .\medical-api `
+  --namespace medical-helm
+
+
+  PS D:\GitHub\FastApiArgoProject\helm> helm template medical-api .\medical-api `
+>>   --namespace medical-helm
+---
+# Source: medical-api/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medical-api-config
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  APP_NAME: "Medical Appointment API"
+  APP_VERSION: "1.0.1"
+  ENVIRONMENT: "development"
+---
+# Source: medical-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: medical-api
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+# Source: medical-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: medical-api
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: medical-api
+      app.kubernetes.io/instance: medical-api
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: medical-api
+        app.kubernetes.io/instance: medical-api
+
+    spec:
+      containers:
+        - name: medical-api
+
+          image: "medical-api:1.0.1"
+          imagePullPolicy: Never
+
+          ports:
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: medical-api-config
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+---
+# Source: medical-api/templates/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+
+metadata:
+  name: medical-api
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: medical-api
+
+  minReplicas: 1
+  maxReplicas: 4
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+
+
+
+The rendered YAML looks correct:
+
+ConfigMap name matches the Deployment reference.
+Service selectors match Pod labels.
+Service port 80 maps to container port 8000.
+Deployment uses image medical-api:1.0.1.
+Probes and resources rendered correctly.
+HPA targets the correct Deployment.
+No hardcoded medical-dev namespace remains.
+
+Apply it:
+
+
+PS D:\GitHub\FastApiArgoProject\helm> helm upgrade --install medical-api .\medical-api `
+>>   --namespace medical-helm `
+>>   --wait `
+>>   --timeout 2m
+Release "medical-api" has been upgraded. Happy Helming!
+NAME: medical-api
+LAST DEPLOYED: Mon Sep 14 12:13:29 2026
+NAMESPACE: medical-helm
+STATUS: deployed
+REVISION: 2
+DESCRIPTION: Upgrade complete
+TEST SUITE: None
+
+
+Now if you pend Docker Desktop in medical-help namespace you will see there deployed deployment,pod,service....
+as well revision 2:
+
+Revision 2 is because:
+
+Revision 1: first successful installation, which created only the ConfigMap.
+Revision 2: successful upgrade that added Deployment, Service, and HPA.
+
+The first release was incomplete, but it did not technically fail—Helm installed everything that existed in the chart at that time.
+
+PS D:\GitHub\FastApiArgoProject\helm> helm history medical-api -n medical-helm
+REVISION        UPDATED                         STATUS          CHART                   APP VERSION     DESCRIPTION
+1               Mon Sep 14 11:25:35 2026        superseded      medical-api-0.1.0       1.0.1           Install complete
+2               Mon Sep 14 12:13:29 2026        deployed        medical-api-0.1.0       1.0.1           Upgrade complete
+
+Note:
+
+You should see both revisions. Helm increments the revision number after every upgrade, allowing rollback:
+BUT: Don’t run that now—it would return to the ConfigMap-only version.
+helm rollback medical-api 1 -n medical-helm
+
+///////////////////////////////////
+
+Now verify the created resources:
+
+kubectl get deployment,pods,service,hpa,configmap -n medical-helm
+
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/medical-api   1/1     1            1           5m13s
+
+NAME                              READY   STATUS    RESTARTS   AGE
+pod/medical-api-656d897bf-265cv   1/1     Running   0          5m13s
+
+NAME                  TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+service/medical-api   ClusterIP   10.110.189.254   <none>        80/TCP    5m13s
+
+NAME                                              REFERENCE                TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/medical-api   Deployment/medical-api   cpu: 3%/60%   1         4         1          5m13s
+
+NAME                           DATA   AGE
+configmap/kube-root-ca.crt     1      53m
+configmap/medical-api-config   3      53m
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get endpointslices -n medical-helm
+NAME                ADDRESSTYPE   PORTS   ENDPOINTS   AGE
+medical-api-wsbxg   IPv4          8000    10.1.0.66   5m54s
+
+EndpointSlice does not mean a public API endpoint. It is a Kubernetes resource that records the Pod addresses behind a Service.
+
+Your output means:
+
+Service medical-api
+        ↓
+Pod IP 10.1.0.66
+        ↓
+Container port 8000
+
+We normally don’t call this directly:
+
+http://10.1.0.66:8000
+
+because:
+
+Pod IP is normally reachable only inside the cluster.
+Pod IP changes when the Pod is recreated.
+It bypasses Service load balancing.
+With several Pods, you would have several changing IPs.
+The Service only sends traffic to Ready endpoints.
+
+Instead, applications inside Kubernetes use the stable Service DNS:
+
+http://medical-api
+
+or the full name:
+
+http://medical-api.medical-helm.svc.cluster.local
+
+From Windows, we use port-forward:
+
+kubectl port-forward -n medical-helm service/medical-api 8081:80
+
+The flow is:
+
+Windows localhost:8081
+        ↓
+Kubernetes Service:80
+        ↓
+EndpointSlice
+        ↓
+Pod 10.1.0.66:8000
+
+So EndpointSlice is Kubernetes’ routing information, while the Service is the stable address clients should use.
+
+Now you can open: http://127.0.0.1:8081/docs#/  and see the apis
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl port-forward -n medical-helm service/medical-api 8081:80
+Forwarding from 127.0.0.1:8081 -> 8000
+Forwarding from [::1]:8081 -> 8000
+Handling connection for 8081
+Handling connection for 8081
+Handling connection for 8081
+Handling connection for 8081
+
+////////////////////////////////////DONE ////////////////

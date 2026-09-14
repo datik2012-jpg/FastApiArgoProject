@@ -83,3 +83,12 @@ secrets.yml
 *.db
 *.sqlite
 *.sqlite3
+
+# Generated Helm manifests, revision exports, and chart packages
+/helm/rendered*.yaml
+/helm/rendered*.yml
+/helm/**/revision-*.yaml
+/helm/**/revision-*.yml
+/revision-*.yaml
+/revision-*.yml
+/helm/**/*.tgz

@@ -92,8 +92,8 @@ url will be opened with http://127.0.0.1:8002/docs and when you run API with a b
 
 
 Build docker image open Powershell and chekc wsl --list + open Docker Destop:
-
-docker build -t medical-api:1.0.0 .
+  
+docker build -t medical-api:1.0.0 . 
 
 after creation check : docker image list  - and see there medical-api image been created
 as well you can see Image in the Docker Desktop
@@ -134,7 +134,7 @@ docker rm medical-api  - remove container
 docker run -d --name medical-api -p 8000:8000 medical-api:1.0.0 - run in detach mode
 
 Verify that the application is not running as root:
-docker exec medical-api whoami - should be appuser
+docker exec medical-api whoami - should be appuser 
 
 connnect to detached container:
 docker exec -it medical-api sh
@@ -358,3 +358,215 @@ POST appointment → Pod 1 stores it
 GET appointments → Pod 2 may return []
 
 //////////////////////Next step — Horizontal Pod Autoscaler (HPA) ////////
+
+
+First check whether Metrics Server is available:
+
+kubectl top nodes
+kubectl top pods -n medical-dev
+
+PS D:\GitHub\FastApiArgoProject> kubectl top pods
+error: Metrics API not available
+PS D:\GitHub\FastApiArgoProject> kubectl top pods -n medical-dev
+error: Metrics API not available
+
+This means your Docker Desktop cluster does not currently provide Metrics Server.
+
+kubectl top and HPA depend on this flow:
+
+Kubelet metrics → Metrics Server → Metrics API → kubectl top / HPA
+
+PS D:\GitHub\FastApiArgoProject> kubectl get deployment metrics-server -n kube-system
+Error from server (NotFound): deployments.apps "metrics-server" not found
+
+
+If it returns NotFound, install the official Metrics Server manifest:
+
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+Wait for it:
+
+kubectl rollout status deployment/metrics-server -n kube-system --timeout=120s
+
+Then test:
+
+kubectl top nodes
+kubectl top pods -n medical-dev
+
+PS D:\GitHub\FastApiArgoProject> kubectl top nodes
+NAME             CPU(cores)   CPU(%)   MEMORY(bytes)   MEMORY(%)
+docker-desktop   1102m        13%      2169Mi          27%
+PS D:\GitHub\FastApiArgoProject> kubectl top pods -n medical-dev
+NAME                           CPU(cores)   MEMORY(bytes)
+medical-api-576b8d6578-t7lwl   3m           38Mi
+medical-api-576b8d6578-xrfm9   3m           37Mi
+
+we faced some tls issue so needed to open a file and do modification. it should be keept in the metric-server config:
+
+Set Notepad as the Kubernetes editor:
+
+$env:KUBE_EDITOR = "notepad"
+
+Open the Deployment:
+
+kubectl edit deployment metrics-server -n kube-system
+
+Notepad will open a YAML file. Find:
+
+containers:
+- args:
+
+Under the existing arguments, add:
+
+  - --kubelet-insecure-tls
+
+You can verify it anytime:
+kubectl get deployment metrics-server -n kube-system `
+  -o jsonpath="{.spec.template.spec.containers[0].args}"
+
+////////////////////////////hpa ////////
+created hpa.yaml
+
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f k8s/hpa.yaml
+horizontalpodautoscaler.autoscaling/medical-api created
+
+Check:
+
+kubectl get hpa -n medical-dev
+
+PS D:\GitHub\FastApiArgoProject> kubectl get hpa -n medical-dev
+NAME          REFERENCE                TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
+medical-api   Deployment/medical-api   cpu: <unknown>/60%   1         4         0          43s
+
+Because usage is below 60%, HPA may eventually reduce the Deployment from two Pods to one:
+
+kubectl get pods -n medical-dev -w
+
+at the moment it keept up 2 pods:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get pods -n medical-dev -w
+NAME                           READY   STATUS    RESTARTS   AGE
+medical-api-576b8d6578-t7lwl   1/1     Running   0          67m
+medical-api-576b8d6578-xrfm9   1/1     Running   0          67m
+
+medical-api-576b8d6578-xrfm9   1/1     Running   0          67m
+PS D:\GitHub\FastApiArgoProject> kubectl describe hpa medical-api -n medical-dev
+Name:                                                  medical-api
+Namespace:                                             medical-dev
+Labels:                                                <none>
+Annotations:                                           <none>
+CreationTimestamp:                                     Thu, 10 Sep 2026 13:35:14 +0300
+Reference:                                             Deployment/medical-api
+Metrics:                                               ( current / target )
+  resource cpu on pods  (as a percentage of request):  3% (3m) / 60%
+Min replicas:                                          1
+Max replicas:                                          4
+Deployment pods:                                       2 current / 2 desired
+
+
+Watch it:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get hpa -n medical-dev -w
+NAME          REFERENCE                TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+medical-api   Deployment/medical-api   cpu: 3%/60%   1         4         1          7m58s
+
+Check in different Terminals:
+
+kubectl get hpa -n medical-dev
+kubectl get pods -n medical-dev
+
+
+////////////////////////////////////////////////////////////
+
+Create load generator This creates a temporary Pod that continuously sends requests to the Service:
+
+load-generator → medical-api Service → FastAPI Pod
+
+Run:
+
+kubectl run load-generator `
+  --image=busybox:1.36 `
+  --restart=Never `
+  -n medical-dev `
+  -- /bin/sh -c "while true; do wget -q -O /dev/null http://medical-api/health; done"
+
+  Verify it:
+
+kubectl get pod load-generator -n medical-dev
+
+
+
+
+
+Step 3 — Watch autoscaling
+
+In one terminal:
+
+kubectl get hpa -n medical-dev -w
+
+In another:
+
+kubectl get pods -n medical-dev -w
+
+Also check CPU:
+
+kubectl top pods -n medical-dev
+
+If utilization exceeds 60%, HPA should create additional Medical API Pods.
+
+Step 4 — Stop the test
+
+After observing the result:
+
+kubectl delete pod load-generator -n medical-dev
+
+Send me these two outputs:
+
+kubectl get hpa -n medical-dev
+kubectl top pods -n medical-dev
+
+
+Excellent—the HPA test succeeded.
+
+What happened:
+
+CPU target:       60%
+Observed CPU:     111%
+Maximum replicas: 4
+Result:           scaled to 4 Pods
+
+The three Pods with age around two minutes were created by the HPA. The older xrfm9 Pod was the original replica.
+
+PS C:\Users\User> kubectl top pods -n medical-dev
+NAME                           CPU(cores)   MEMORY(bytes)
+medical-api-576b8d6578-kvlqk   3m           37Mi
+medical-api-576b8d6578-mjfh5   3m           37Mi
+medical-api-576b8d6578-njdn6   3m           37Mi
+medical-api-576b8d6578-xrfm9   3m           37Mi
+
+and now they are terminating:
+
+PS C:\Users\User> kubectl get pods -n medical-dev -w
+NAME                           READY   STATUS    RESTARTS   AGE
+medical-api-576b8d6578-kvlqk   1/1     Running   0          8m21s
+medical-api-576b8d6578-mjfh5   1/1     Running   0          8m21s
+medical-api-576b8d6578-njdn6   1/1     Running   0          8m21s
+medical-api-576b8d6578-xrfm9   1/1     Running   1          3d22h
+medical-api-576b8d6578-kvlqk   1/1     Terminating   0          9m
+medical-api-576b8d6578-mjfh5   1/1     Terminating   0          9m
+medical-api-576b8d6578-njdn6   1/1     Terminating   0          9m
+medical-api-576b8d6578-kvlqk   1/1     Terminating   0          9m
+medical-api-576b8d6578-njdn6   1/1     Terminating   0          9m
+medical-api-576b8d6578-mjfh5   1/1     Terminating   0          9m
+medical-api-576b8d6578-mjfh5   0/1     Completed     0          9m1s
+medical-api-576b8d6578-njdn6   0/1     Completed     0          9m1s
+medical-api-576b8d6578-kvlqk   0/1     Completed     0          9m1s
+medical-api-576b8d6578-kvlqk   0/1     Completed     0          9m1s
+medical-api-576b8d6578-kvlqk   0/1     Completed     0          9m1s
+medical-api-576b8d6578-njdn6   0/1     Completed     0          9m1s
+medical-api-576b8d6578-njdn6   0/1     Completed     0          9m1s
+medical-api-576b8d6578-mjfh5   0/1     Completed     0          9m1s
+medical-api-576b8d6578-mjfh5   0/1     Completed     0          9m1s
+PS C:\Users\User> kubectl get pods -n medical-dev -w
+NAME                           READY   STATUS    RESTARTS   AGE
+medical-api-576b8d6578-xrfm9   1/1     Running   1          3d22h

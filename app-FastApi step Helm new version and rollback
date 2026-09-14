@@ -1,0 +1,383 @@
+After we success rolled back first(version 2) with Helm (see the file app-FastApi step Helm)
+We want to do modification in the Values Helm file - it will like a new version release and we want to deploy it - mean to get new Helm Version
+and later we want to ROLLBACK to Version 2.
+
+
+1. Change values.yaml
+
+Change:
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+to:
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 300Mi
+
+
+
+2. Preview the change
+
+Render the Deployment:
+
+helm template medical-api .\medical-api `
+  --namespace medical-helm `
+  --show-only templates/deployment.yaml
+
+
+
+  PS D:\GitHub\FastApiArgoProject\helm> helm template medical-api .\medical-api `
+>>   --namespace medical-helm `
+>>   --show-only templates/deployment.yaml
+---
+# Source: medical-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: medical-api
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: medical-api
+      app.kubernetes.io/instance: medical-api
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: medical-api
+        app.kubernetes.io/instance: medical-api
+
+    spec:
+      containers:
+        - name: medical-api
+
+          image: "medical-api:1.0.1"
+          imagePullPolicy: Never
+
+          ports:
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: medical-api-config
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+          resources:
+            limits:
+              cpu: 500m
+              memory: 300Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+
+
+///////////////////////////apply the change ///////
+
+
+Correct—the template now renders:
+
+memory: 300Mi
+
+This is only a preview; the cluster still has 256Mi.
+
+Now apply revision 3:
+
+helm upgrade medical-api .\medical-api `
+  --namespace medical-helm `
+  --wait `
+  --timeout 2m
+
+
+  PS D:\GitHub\FastApiArgoProject\helm> helm upgrade medical-api .\medical-api `
+>>   --namespace medical-helm `
+>>   --wait `
+>>   --timeout 2m
+Release "medical-api" has been upgraded. Happy Helming!
+NAME: medical-api
+LAST DEPLOYED: Mon Sep 14 12:35:03 2026
+NAMESPACE: medical-helm
+STATUS: deployed
+REVISION: 3
+DESCRIPTION: Upgrade complete
+TEST SUITE: None
+
+NOw we can see we got VErsion 3  as well the same we can see in Docker-Desktop in medical-helm namespace under Config Maps and Secrets - we can see 3 versions
+
+///////////////////////////verify /////////
+
+Then verify:
+
+helm history medical-api -n medical-helm
+
+PS D:\GitHub\FastApiArgoProject\helm> helm history medical-api -n medical-helm
+REVISION        UPDATED                         STATUS          CHART                   APP VERSION     DESCRIPTION
+1               Mon Sep 14 11:25:35 2026        superseded      medical-api-0.1.0       1.0.1           Install complete
+2               Mon Sep 14 12:13:29 2026        superseded      medical-api-0.1.0       1.0.1           Upgrade complete
+3               Mon Sep 14 12:35:03 2026        deployed        medical-api-0.1.0       1.0.1           Upgrade complete
+
+check the memmory:
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get deployment medical-api -n medical-helm `
+>>   -o jsonpath="{.spec.template.spec.containers[0].resources.limits.memory}"
+300Mi
+
+Also check that Kubernetes replaced the Pod during the rolling update:
+
+kubectl get pods -n medical-helm
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get pods -n medical-helm
+NAME                           READY   STATUS    RESTARTS   AGE
+medical-api-66b7967f99-rx5qm   1/1     Running   0          3m52s
+
+as you can see 3 minutes running is new pod !!!
+
+and to see all resources for medical-helm namespace:
+
+PS D:\GitHub\FastApiArgoProject\helm> kubectl get deployment,pods,service,hpa,configmap -n medical-helm
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/medical-api   1/1     1            1           25m
+
+NAME                               READY   STATUS    RESTARTS   AGE
+pod/medical-api-66b7967f99-rx5qm   1/1     Running   0          4m23s
+
+NAME                  TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+service/medical-api   ClusterIP   10.110.189.254   <none>        80/TCP    25m
+
+NAME                                              REFERENCE                TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/medical-api   Deployment/medical-api   cpu: 3%/60%   1         4         1          25m
+
+NAME                           DATA   AGE
+configmap/kube-root-ca.crt     1      73m
+configmap/medical-api-config   3      73m
+
+Summary fpr the first part is:
+
+The upgrade worked. Evidence:
+
+Deployment age: 25m
+New Pod age: 4m23s
+
+Kubernetes replaced the old Pod because the Deployment configuration changed.
+
+Just again check the version in case you want:
+
+Check revision 3:
+
+helm history medical-api -n medical-helm
+
+/////////////////////////////////////////PART 2 to ROLLBACK to version 2 ///////
+
+Check revision 3:
+
+helm history medical-api -n medical-helm
+
+PS D:\GitHub\FastApiArgoProject\helm> helm history medical-api -n medical-helm
+REVISION        UPDATED                         STATUS          CHART                   APP VERSION     DESCRIPTION
+1               Mon Sep 14 11:25:35 2026        superseded      medical-api-0.1.0       1.0.1           Install complete
+2               Mon Sep 14 12:13:29 2026        superseded      medical-api-0.1.0       1.0.1           Upgrade complete
+3               Mon Sep 14 12:35:03 2026        deployed        medical-api-0.1.0       1.0.1           Upgrade complete
+
+
+
+Then roll back to revision 2:
+
+helm rollback medical-api 2 `
+  --namespace medical-helm `
+  --wait `
+  --timeout 2m
+
+
+  PS D:\GitHub\FastApiArgoProject\helm> helm history medical-api -n medical-helm
+REVISION        UPDATED                         STATUS          CHART                   APP VERSION     DESCRIPTION
+1               Mon Sep 14 11:25:35 2026        superseded      medical-api-0.1.0       1.0.1           Install complete
+2               Mon Sep 14 12:13:29 2026        superseded      medical-api-0.1.0       1.0.1           Upgrade complete
+3               Mon Sep 14 12:35:03 2026        deployed        medical-api-0.1.0       1.0.1           Upgrade complete
+PS D:\GitHub\FastApiArgoProject\helm> helm rollback medical-api 2 `
+>>   --namespace medical-helm `
+>>   --wait `
+>>   --timeout 2m
+Rollback was a success! Happy Helming!
+
+
+check the current version:
+
+PS D:\GitHub\FastApiArgoProject\helm> helm history medical-api -n medical-helm
+REVISION        UPDATED                         STATUS          CHART                   APP VERSION     DESCRIPTION
+1               Mon Sep 14 11:25:35 2026        superseded      medical-api-0.1.0       1.0.1           Install complete
+2               Mon Sep 14 12:13:29 2026        superseded      medical-api-0.1.0       1.0.1           Upgrade complete
+3               Mon Sep 14 12:35:03 2026        superseded      medical-api-0.1.0       1.0.1           Upgrade complete
+4               Mon Sep 14 12:54:46 2026        deployed        medical-api-0.1.0       1.0.1           Rollback to 2
+
+Confirm memmory is back from 300 to s56:
+
+kubectl get deployment medical-api -n medical-helm `
+  -o jsonpath="{.spec.template.spec.containers[0].resources.limits.memory}"
+
+  PS D:\GitHub\FastApiArgoProject\helm> kubectl get deployment medical-api -n medical-helm `
+>>   -o jsonpath="{.spec.template.spec.containers[0].resources.limits.memory}"
+256Mis
+
+
+Expected:
+
+256Mi
+
+Important: your local values.yaml probably still contains 300Mi. Change it back:
+
+limits:
+  cpu: 500m
+  memory: 256Mi
+
+Otherwise, the next helm upgrade will apply 300Mi again.
+
+You have now practised the complete Helm lifecycle:
+
+lint → template → install → upgrade → history → rollback
+
+///////////////////////////////////NOte/////////
+
+
+ut how can i know the diff between versions - it can be image or another changes
+
+helm history only shows metadata. To see the actual differences—image, memory, replicas, probes, environment variables—compare the rendered manifests of two revisions.
+
+Compare revisions 2 and 3
+
+Export both manifests:
+
+helm get manifest medical-api -n medical-helm --revision 2 |
+  Out-File revision-2.yaml -Encoding utf8
+
+helm get manifest medical-api -n medical-helm --revision 3 |
+  Out-File revision-3.yaml -Encoding utf8
+
+Compare them with Git:
+
+git diff --no-index revision-2.yaml revision-3.yaml
+
+You should see something like:
+
+resources:
+  limits:
+-   memory: 256Mi
++   memory: 300Mi
+
+If the image changed, it would show:
+
+- image: medical-api:1.0.1
++ image: medical-api:1.0.2
+
+git diff --no-index may return exit code 1; that normally means differences were found, not that the comparison failed.
+
+Compare Helm values
+
+You can also inspect the values saved with each release:
+
+helm get values medical-api -n medical-helm --revision 2 --all
+helm get values medical-api -n medical-helm --revision 3 --all
+
+The distinction:
+
+helm get values — configuration supplied to Helm.
+helm get manifest — final Kubernetes YAML generated from the chart and values.
+helm history — revision number, status, chart version, and description.
+
+For troubleshooting, comparing manifests is usually most useful because it shows exactly what Kubernetes received.
+
+In a real GitOps project, Git gives us this comparison automatically:
+
+git diff
+git log --oneline
+git show <commit>
+
+That is one major benefit of Argo CD: every desired-state change has a Git commit showing exactly what changed.
+
+////////////////////////////Mote //////
+
+
+so in case there new image deployed ,should i change the yamls ?
+
+Yes—but change the image tag in values.yaml, not in deployment.yaml.
+
+For a new image:
+
+image:
+  repository: medical-api
+  tag: "1.0.2"
+  pullPolicy: Never
+
+The Deployment template remains unchanged:
+
+image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+
+For local Kubernetes:
+
+docker build -t medical-api:1.0.2 .
+helm upgrade medical-api .\helm\medical-api -n medical-helm --wait
+
+Kubernetes sees:
+
+- image: medical-api:1.0.1
++ image: medical-api:1.0.2
+
+and performs a rolling update.
+
+You can also update Chart.yaml:
+
+appVersion: "1.0.2"
+
+That value is mainly descriptive; values.yaml → image.tag controls which image actually runs.
+
+In our future GitOps flow:
+
+CI builds medical-api:1.0.2
+→ pushes it to Azure ACR
+→ updates image.tag in values.yaml
+→ commits the change
+→ Argo CD detects it
+→ AKS performs rolling deployment
+
+Always use a new immutable tag. Reusing 1.0.1 or latest makes it difficult to identify changes and may not trigger a new deployment.

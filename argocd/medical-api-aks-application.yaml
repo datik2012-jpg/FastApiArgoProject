@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: medical-api-aks
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/datik2012-jpg/FastApiArgoProject.git
+    targetRevision: main
+    path: helm/medical-api
+
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-aks.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: medical-aks
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+    syncOptions:
+      - CreateNamespace=true

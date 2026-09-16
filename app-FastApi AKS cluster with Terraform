@@ -1,0 +1,938 @@
+he next step is create an AKS cluster with Terraform, connect it to ACR using AcrPull, and later deploy medical-api:1.0.1.
+
+We’ll do it safely in this order:
+
+Write the AKS Terraform configuration.
+Run terraform plan.
+Review exactly what Azure will create.
+Only then run terraform apply, because the AKS worker VM costs money.
+Deploy the image from ACR.
+Delete the resources with terraform destroy when practice is finished.
+
+The immediate next action is to create terraform/aks.tf. We’ll use one small worker node initially to limit cost. Before writing it, run.
+We run that command before writing aks.tf to confirm Azure permits the VM size we plan to specify for the AKS worker node.
+
+(do login if needed to Azure from powershell : az login)
+
+then run (not worked for me):
+
+az vm list-skus --location northeurope --resource-type virtualMachines --query "[?name=='Standard_B2s'].{Size:name, Restrictions:restrictions}" --output table
+
+
+we will proceed with creating terraform file which create AKS cluster:
+
+
+Now create terraform/aks.tf:
+
+resource "azurerm_kubernetes_cluster" "main" {
+  name                = "aks-${var.project_name}-${var.environment}"
+  location            = var.aks_location
+  resource_group_name = azurerm_resource_group.main.name
+  dns_prefix          = "${var.project_name}-${var.environment}"
+  sku_tier            = "Free"
+
+  default_node_pool {
+    name                 = "system"
+    node_count           = 1
+    vm_size              = "Standard_B2s"
+    type                 = "VirtualMachineScaleSets"
+    os_disk_size_gb      = 30
+    auto_scaling_enabled = false
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  role_based_access_control_enabled = true
+  oidc_issuer_enabled               = true
+  workload_identity_enabled         = true
+
+  network_profile {
+    network_plugin    = "azure"
+    load_balancer_sku = "standard"
+  }
+
+  tags = {
+    project     = var.project_name
+    environment = var.environment
+    managed_by  = "terraform"
+  }
+}
+
+resource "azurerm_role_assignment" "aks_acr_pull" {
+  scope                = azurerm_container_registry.main.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_kubernetes_cluster.main.kubelet_identity[0].object_id
+}
+
+
+
+This creates:
+
+An AKS control plane using the free management tier.
+One Standard_B2s worker node—the VM is chargeable.
+A managed identity for AKS.
+AcrPull permission so AKS can pull your image without a registry password.
+
+Add to outputs.tf:
+
+output "aks_name" {
+  description = "AKS cluster name"
+  value       = azurerm_kubernetes_cluster.main.name
+}
+
+Now only validate and preview:
+
+terraform fmt
+terraform validate
+terraform plan
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform fmt
+PS D:\GitHub\FastApiArgoProject\terraform> terraform validate
+Success! The configuration is valid.
+
+>terraform plan
+
+Plan: 2 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + aks_name                = "aks-medical-api-dev"
+
+validate a plan:
+
+If The plan is correct:
+
+AKS cluster
+AcrPull role assignment
+No modifications or deletions
+
+Now create it:
+
+terraform apply
+
+Output should be something like:
+
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+acr_login_server = "medical5ydsdsdd.azurecr.io"
+acr_name = "medicalapidsdsdsdsd"
+aks_name = "aks-medical-api-dev"
+resource_group_location = "westeurope"
+resource_group_name = "rg-medical-api-dev"
+
+and you can see it under Resource group in Azure UI
+from Powershell to validate:
+
+PS D:\GitHub\FastApiArgoProject\terraform> az aks list --resource-group rg-medical-api-dev --output table
+Name                 Location    ResourceGroup       KubernetesVersion    CurrentKubernetesVersion    ProvisioningState    Fqdn
+-------------------  ----------  ------------------  -------------------  --------------------------  -------------------  ---------------------------------------------
+aks-medical-api-dev  eastus      rg-medical-api-dev  1.35                 1.35.7                      Succeeded
+
+terraform state list:
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform state list
+azurerm_container_registry.main
+azurerm_kubernetes_cluster.main
+azurerm_resource_group.main
+azurerm_role_assignment.aks_acr_pull
+random_string.acr_suffix
+
+///////////////////////////////SO AKS Cluster been created //////////////
+
+
+/////////////////////////////////////////////NExt step is connect k8s to the cluster ////////////
+
+
+Next, connect kubectl to the new AKS cluster instead to Desktop Docker so we need do few steps:
+
+az aks get-credentials `
+  --resource-group rg-medical-api-dev `
+  --name aks-medical-api-dev `
+  --overwrite-existing
+
+ Output: Merged "aks-medical-api-dev" as current context in C:\Users\User\.kube\config
+
+ This changes your active Kubernetes context from Docker Desktop to AKS. Verify it:
+
+kubectl config current-context
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl config current-context
+aks-medical-api-dev
+
+
+kubectl get nodes
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl get nodes
+NAME                             STATUS   ROLES    AGE     VERSION
+aks-system-60197328-vmss000000   Ready    <none>   9m49s   v1.35.7
+
+
+Also confirm Terraform controls both resources:
+
+terraform state list
+
+You should see:
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform state list
+azurerm_container_registry.main
+azurerm_kubernetes_cluster.main
+azurerm_resource_group.main
+azurerm_role_assignment.aks_acr_pull
+random_string.acr_suffix
+
+/////////////////Question //////////
+
+
+This changes your active Kubernetes context from Docker Desktop to AKS. Verify it:  are you sure it happen on y local machine and not in Azure?
+
+Yes. The context switch happens on your local Windows machine, but the selected context points to the Kubernetes cluster in Azure.
+
+This command:
+
+az aks get-credentials ...
+
+downloads the AKS connection information and adds it to your local kubeconfig, normally:
+
+C:\Users\User\.kube\config
+
+Then:
+
+kubectl config current-context
+
+selects which cluster your local kubectl commands control.
+
+So the flow is:
+
+Local PowerShell
+      ↓
+Local kubectl + kubeconfig
+      ↓
+AKS API server in Azure
+      ↓
+Azure Kubernetes resources
+
+After switching to AKS:
+
+kubectl get pods
+
+runs locally, but it retrieves Pods from Azure AKS—not Docker Desktop.
+
+Your Docker Desktop context is not deleted. You can see all contexts:
+
+kubectl config get-contexts
+
+Switch back to Docker Desktop later:
+
+kubectl config use-context docker-desktop
+
+Switch to AKS:
+
+kubectl config use-context aks-medical-api-dev
+
+Always check before applying resources:
+
+kubectl config current-context
+
+That prevents accidentally deploying to the wrong cluster.
+
+//////////////////////MUST REMEMBER ALWAYS CHECK THE CONTEXT BEFORE RUN APPLY !!!!!                    //////////////////////////
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl config current-context
+aks-medical-api-dev
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl get nodes
+>> kubectl config current-context
+NAME                             STATUS   ROLES    AGE   VERSION
+aks-system-60197328-vmss000000   Ready    <none>   16m   v1.35.7
+aks-medical-api-dev
+
+
+/////////////////////////////////////////////////////
+
+
+Your local kubectl is now connected to the Azure AKS cluster, and its node is healthy.
+
+Next, render the Helm chart with the ACR image without deploying yet.
+
+From the terraform directory:
+
+$acrServer = terraform output -raw acr_login_server
+
+Check its value:
+
+$acrServer
+
+It should look like:
+
+medicalapidevxxxxxx.azurecr.io
+
+Now test-render the chart:
+
+helm upgrade --install medical-api ..\helm\medical-api `
+  --namespace medical-aks `
+  --create-namespace `
+  --set-string image.repository="$acrServer/medical-api" `
+  --set-string image.tag="1.0.1" `
+  --dry-run
+
+  Output:
+
+  level=WARN msg="--dry-run is deprecated and should be replaced with '--dry-run=client'"
+Release "medical-api" does not exist. Installing it now.
+NAME: medical-api
+LAST DEPLOYED: Wed Sep 16 17:52:34 2026
+NAMESPACE: medical-aks
+STATUS: pending-install
+REVISION: 1
+DESCRIPTION: Dry run complete
+TEST SUITE: None
+HOOKS:
+MANIFEST:
+
+This does not deploy anything. In the output, find the image line:
+
+image: "medicalapidevxxxxxx.azurecr.io/medical-api:1.0.1"
+
+If the dry run succeeds and shows the correct ACR image, we’ll remove --dry-run and deploy it to AKS.
+
+So we just check with HElp But since our project’s goal is GitOps, we can skip the direct Helm deployment.
+
+////////////////////////////////////////////////////// Add ArgoCD to the Azure cluster////////////////
+
+
+Important: your existing Argo CD is installed in the local Docker Desktop cluster. AKS is a separate Kubernetes cluster, so it does not currently have Argo CD.
+
+The correct next sequence is:
+
+Install Argo CD inside AKS.
+Update the Git Helm values with the ACR image address.
+Create an Argo CD Application for the AKS environment.
+Argo CD deploys the Helm chart into AKS.
+Verify AKS pulls medical-api:1.0.1 from ACR.
+
+Your current context is already AKS, so begin by confirming it:
+
+kubectl config current-context
+
+Expected:
+
+aks-medical-api-dev
+
+Then create the Argo CD namespace:
+
+kubectl create namespace argocd
+
+This is the right GitOps path; we will not deploy the application manually with helm upgrade.
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl create namespace argocd
+namespace/argocd created
+
+
+Now install Argo CD into AKS using the official stable manifest:
+
+kubectl apply -n argocd `
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+This creates Argo CD resources inside Azure AKS—not in Docker Desktop—because your active context is aks-medical-api-dev.
+
+
+Output:
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl apply -n argocd `
+>>   -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+customresourcedefinition.apiextensions.k8s.io/applications.argoproj.io created
+customresourcedefinition.apiextensions.k8s.io/appprojects.argoproj.io created
+serviceaccount/argocd-application-controller created
+serviceaccount/argocd-applicationset-controller created
+serviceaccount/argocd-dex-server created
+serviceaccount/argocd-notifications-controller created
+serviceaccount/argocd-redis created
+serviceaccount/argocd-repo-server created
+serviceaccount/argocd-server created
+role.rbac.authorization.k8s.io/argocd-application-controller created
+role.rbac.authorization.k8s.io/argocd-applicationset-controller created
+role.rbac.authorization.k8s.io/argocd-dex-server created
+role.rbac.authorization.k8s.io/argocd-notifications-controller created
+role.rbac.authorization.k8s.io/argocd-redis created
+role.rbac.authorization.k8s.io/argocd-server created
+clusterrole.rbac.authorization.k8s.io/argocd-application-controller created
+clusterrole.rbac.authorization.k8s.io/argocd-applicationset-controller created
+clusterrole.rbac.authorization.k8s.io/argocd-server created
+rolebinding.rbac.authorization.k8s.io/argocd-application-controller created
+rolebinding.rbac.authorization.k8s.io/argocd-applicationset-controller created
+rolebinding.rbac.authorization.k8s.io/argocd-dex-server created
+rolebinding.rbac.authorization.k8s.io/argocd-notifications-controller created
+rolebinding.rbac.authorization.k8s.io/argocd-redis created
+rolebinding.rbac.authorization.k8s.io/argocd-server created
+clusterrolebinding.rbac.authorization.k8s.io/argocd-application-controller created
+clusterrolebinding.rbac.authorization.k8s.io/argocd-applicationset-controller created
+clusterrolebinding.rbac.authorization.k8s.io/argocd-server created
+configmap/argocd-cm created
+configmap/argocd-cmd-params-cm created
+configmap/argocd-gpg-keys-cm created
+configmap/argocd-notifications-cm created
+configmap/argocd-rbac-cm created
+configmap/argocd-ssh-known-hosts-cm created
+configmap/argocd-tls-certs-cm created
+secret/argocd-notifications-secret created
+secret/argocd-secret created
+service/argocd-applicationset-controller created
+service/argocd-dex-server created
+service/argocd-metrics created
+service/argocd-notifications-controller-metrics created
+service/argocd-redis created
+service/argocd-repo-server created
+service/argocd-server created
+service/argocd-server-metrics created
+deployment.apps/argocd-applicationset-controller created
+deployment.apps/argocd-dex-server created
+deployment.apps/argocd-notifications-controller created
+deployment.apps/argocd-redis created
+deployment.apps/argocd-repo-server created
+deployment.apps/argocd-server created
+statefulset.apps/argocd-application-controller created
+networkpolicy.networking.k8s.io/argocd-application-controller-network-policy created
+networkpolicy.networking.k8s.io/argocd-applicationset-controller-network-policy created
+networkpolicy.networking.k8s.io/argocd-dex-server-network-policy created
+networkpolicy.networking.k8s.io/argocd-notifications-controller-network-policy created
+networkpolicy.networking.k8s.io/argocd-redis-network-policy created
+networkpolicy.networking.k8s.io/argocd-repo-server-network-policy created
+networkpolicy.networking.k8s.io/argocd-server-network-policy created
+The CustomResourceDefinition "applicationsets.argoproj.io" is invalid: metadata.annotations: Too long: may not be more than 262144 bytes
+
+
+Wait for its Deployments:
+
+kubectl wait --for=condition=Available `
+  deployment --all `
+  -n argocd `
+  --timeout=300s
+
+  PS D:\GitHub\FastApiArgoProject\terraform> kubectl wait --for=condition=Available `
+>>   deployment --all `
+>>   -n argocd `
+>>   --timeout=300s
+deployment.apps/argocd-applicationset-controller condition met
+deployment.apps/argocd-dex-server condition met
+deployment.apps/argocd-notifications-controller condition met
+deployment.apps/argocd-redis condition met
+deployment.apps/argocd-repo-server condition met
+deployment.apps/argocd-server condition met
+
+Then check every Argo CD Pod:
+
+kubectl get pods -n argocd
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl get pods -n argocd
+NAME                                                READY   STATUS    RESTARTS      AGE
+argocd-application-controller-0                     1/1     Running   0             79s
+argocd-applicationset-controller-7f95b9cd7c-qxrsw   1/1     Running   0             82s
+argocd-dex-server-8666767789-pl675                  1/1     Running   2 (62s ago)   82s
+argocd-notifications-controller-797f48b4-r9bgs      1/1     Running   0             81s
+argocd-redis-6fd5864464-mrss6                       1/1     Running   0             81s
+argocd-repo-server-c4977564f-t9d2x                  1/1     Running   0             80s
+argocd-server-59bd8b5c4-2tcvp                       1/1     Running   0             80s
+
+All Pods should eventually show Running. The application controller may be a StatefulSet, so also check:
+
+kubectl get statefulset -n argocd
+
+PS D:\GitHub\FastApiArgoProject\terraform> kubectl get statefulset -n argocd
+NAME                            READY   AGE
+argocd-application-controller   1/1     100s
+
+
+Argo CD is healthy inside AKS.
+
+Next we need an AKS-specific Helm values file containing the Azure image address. First retrieve it:
+
+$acrServer = terraform output -raw acr_login_server
+$acrServer
+
+The output will resemble:
+
+medicalapidevxxxxxx.azurecr.io
+
+Create:
+
+D:\GitHub\FastApiArgoProject\helm\medical-api\values-aks.yaml
+
+with:
+
+image:
+  repository: medicalapidevxxxxxx.azurecr.io/medical-api
+  tag: "1.0.1"
+  pullPolicy: IfNotPresent
+
+Replace medicalapidevxxxxxx.azurecr.io with your actual $acrServer.
+
+Test that Helm renders the Azure image:
+
+helm template medical-api .\helm\medical-api --values .\helm\medical-api\values-aks.yaml | Select-String "image:"
+
+PS D:\GitHub\FastApiArgoProject> helm template medical-api .\helm\medical-api --values .\helm\medical-api\values-aks.yaml | Select-String "image:"
+
+          image: "medicalapidevxea5yd.azurecr.io/medical-api:1.0.1"
+
+Meaning: The Helm chart renders the correct ACR image.
+
+
+/////////////////////////////////
+
+Now commit this AKS values file so Argo CD can read it from Git:
+
+
+PS D:\GitHub\FastApiArgoProject> git add helm/medical-api/values-aks.yaml
+PS D:\GitHub\FastApiArgoProject> git commit -m "Add AKS Helm values for Azure deployment"
+[main 0d7808c] Add AKS Helm values for Azure deployment
+ 1 file changed, 4 insertions(+)
+ create mode 100644 helm/medical-api/values-aks.yaml
+
+ PS D:\GitHub\FastApiArgoProject> git push origin main
+Enumerating objects: 8, done.
+Counting objects: 100% (8/8), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (4/4), done.
+Writing objects: 100% (5/5), 492 bytes | 492.00 KiB/s, done.
+Total 5 (delta 2), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (2/2), completed with 2 local objects.
+To https://github.com/datik2012-jpg/FastApiArgoProject.git
+   426af55..0d7808c  main -> main
+
+ The ACR server name is not a secret, so it is safe to store in Git. Do not commit Terraform state files or Azure credentials.
+
+After pushing, check the existing Argo CD Application manifest:
+
+Get-Content .\argocd\medical-api-application.yaml
+
+We’ll use it as the basis for a separate medical-api-aks-application.yaml that:
+
+runs inside the AKS Argo CD installation;
+reads helm/medical-api;
+uses values-aks.yaml;
+deploys into an AKS namespace such as medical-api;
+enables automatic sync and self-healing.
+
+
+we need create a new yaml  Create a new file:
+
+argocd/medical-api-aks-application.yaml
+
+content:
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: medical-api-aks
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/datik2012-jpg/FastApiArgoProject.git
+    targetRevision: main
+    path: helm/medical-api
+
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-aks.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: medical-aks
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+    syncOptions:
+      - CreateNamespace=true
+
+
+
+Why two values files:
+
+values.yaml       → shared/default configuration
+values-aks.yaml   → overrides the image with the Azure ACR image
+
+Validate it without creating the Application:
+
+kubectl apply `
+  --dry-run=client `
+  -f .\argocd\medical-api-aks-application.yaml
+
+  PS D:\GitHub\FastApiArgoProject> kubectl apply `
+>>   --dry-run=client `
+>>   -f .\argocd\medical-api-aks-application.yaml
+application.argoproj.io/medical-api-aks created (dry run)
+
+
+
+Then commit and push:
+
+git add argocd/medical-api-aks-application.yaml
+git commit -m "Add Argo CD application for AKS"
+git push origin main
+
+PS D:\GitHub\FastApiArgoProject> git push origin main
+Enumerating objects: 6, done.
+Counting objects: 100% (6/6), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (4/4), done.
+Writing objects: 100% (4/4), 671 bytes | 671.00 KiB/s, done.
+Total 4 (delta 1), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (1/1), completed with 1 local object.
+To https://github.com/datik2012-jpg/FastApiArgoProject.git
+   0d7808c..38fe9bc  main -> main
+
+
+Finally, bootstrap the Application into AKS:
+
+kubectl apply -f .\argocd\medical-api-aks-application.yaml
+
+
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f .\argocd\medical-api-aks-application.yaml
+application.argoproj.io/medical-api-aks created
+
+
+
+Your manifest tells Argo CD:
+
+source:
+  path: helm/medical-api
+  helm:
+    valueFiles:
+      - values.yaml
+      - values-aks.yaml
+
+The flow is:
+
+Git push
+   ↓
+Argo CD reads helm/medical-api
+   ↓
+Argo CD runs Helm template internally
+   ↓
+Generated Kubernetes YAML
+   ↓
+Argo CD applies it to AKS
+
+The command you ran:
+
+kubectl apply -f .\argocd\medical-api-aks-application.yaml
+
+only bootstrapped the Argo CD Application. From now on, Argo CD manages the Helm deployment.
+
+Check its status:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get application medical-api-aks -n argocd
+NAME              SYNC STATUS   HEALTH STATUS
+medical-api-aks   Synced        Healthy
+
+Then check the namespace and Pods:
+
+kubectl get all -n medical-aks
+kubectl get pods -n medical-aks -w
+
+Expected Argo status:
+
+SYNC STATUS   HEALTH STATUS
+Synced        Healthy
+
+PS D:\GitHub\FastApiArgoProject> kubectl get application medical-api-aks -n argocd
+NAME              SYNC STATUS   HEALTH STATUS
+medical-api-aks   Synced        Healthy
+PS D:\GitHub\FastApiArgoProject> kubectl get all -n medical-aks
+NAME                                   READY   STATUS    RESTARTS   AGE
+pod/medical-api-aks-7f5df4bfcd-54bwc   1/1     Running   0          3m38s
+
+NAME                      TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE
+service/medical-api-aks   ClusterIP   10.0.152.32   <none>        80/TCP    3m38s
+
+NAME                              READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/medical-api-aks   1/1     1            1           3m39s
+
+NAME                                         DESIRED   CURRENT   READY   AGE
+replicaset.apps/medical-api-aks-7f5df4bfcd   1         1         1       3m39s
+
+NAME                                                  REFERENCE                    TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/medical-api-aks   Deployment/medical-api-aks   cpu: 1%/60%   1         4         1          3m39s
+PS D:\GitHub\FastApiArgoProject> kubectl get pods -n medical-aks -w
+NAME                               READY   STATUS    RESTARTS   AGE
+medical-api-aks-7f5df4bfcd-54bwc   1/1     Running   0          3m40s
+
+
+
+The full Azure GitOps deployment succeeded:
+
+Argo CD: Synced and Healthy
+Pod: Running and ready
+Service: available internally on port 80
+HPA: active, currently using about 1% CPU
+AKS successfully pulled the private image from ACR using AcrPull
+
+Now verify which image AKS is running:
+
+kubectl get deployment medical-api-aks `
+  -n medical-aks `
+  -o jsonpath="{.spec.template.spec.containers[0].image}"
+
+Expected:
+
+medicalapidevxea5yd.azurecr.io/medical-api:1.0.1
+
+
+
+Then test the application locally through the AKS service:
+
+kubectl port-forward service/medical-api-aks `
+  -n medical-aks `
+  8080:80
+
+Keep that terminal open. In a second PowerShell terminal, run:
+
+Invoke-RestMethod http://127.0.0.1:8080/health
+
+also we can see in Azure ui:
+
+In Azure Portal:
+
+Open Azure Portal.
+Search for Kubernetes services.
+Open aks-medical-api-dev.
+In the left menu, find Kubernetes resources.
+Select Workloads.
+Open the Pods tab.
+Filter Namespace to medical-aks.
+
+You should see:
+
+medical-api-aks-7f5df4bfcd-54bwc
+
+Click the Pod to view:
+
+Status and readiness
+Container image
+CPU and memory information
+Events
+YAML
+Container logs
+
+You can also select Namespaces → medical-aks → Workloads.
+
+///////////////////////////////////////////////
+
+I have detected the issue in : argocd-applicationset-controller-7f95b9cd7c-qxrsw
+
+That confirms the root cause: the ApplicationSet controller is installed, but its required CRD is missing.
+
+and to fix try rerun:
+
+
+kubectl apply --server-side `
+  --force-conflicts `
+  -n argocd `
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+  After it completes, verify:
+
+kubectl get crd applicationsets.argoproj.io
+
+PS D:\GitHub\FastApiArgoProject> kubectl get crd applicationsets.argoproj.io
+NAME                          CREATED AT
+applicationsets.argoproj.io   2026-09-16T15:59:09Z
+
+Expected:
+
+NAME                             CREATED AT
+applicationsets.argoproj.io      ...
+
+restart controller:
+
+PS D:\GitHub\FastApiArgoProject> kubectl rollout restart deployment/argocd-applicationset-controller -n argocd
+deployment.apps/argocd-applicationset-controller restarted
+PS D:\GitHub\FastApiArgoProject> kubectl rollout status deployment/argocd-applicationset-controller -n argocd --timeout=120s
+deployment "argocd-applicationset-controller" successfully rolled out
+
+Final check:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get pods -n argocd
+NAME                                                READY   STATUS    RESTARTS      AGE
+argocd-application-controller-0                     1/1     Running   0             63m
+argocd-applicationset-controller-65dd577656-qclgq   1/1     Running   0             46s
+argocd-dex-server-8666767789-pl675                  1/1     Running   2 (63m ago)   63m
+argocd-notifications-controller-797f48b4-r9bgs      1/1     Running   0             63m
+argocd-redis-6fd5864464-mrss6                       1/1     Running   0             63m
+argocd-repo-server-c4977564f-t9d2x                  1/1     Running   0             63m
+argocd-server-59bd8b5c4-2tcvp                       1/1     Running   0             63m
+
+///////////////////////////Destory the things ////////////////
+
+
+From the Terraform directory:
+
+cd D:\GitHub\FastApiArgoProject\terraform
+terraform plan -destroy
+
+will show:
+
+Plan: 0 to add, 0 to change, 5 to destroy.
+
+Changes to Outputs:
+  - acr_login_server        = "medicalapidevxea5yd.azurecr.io" -> null
+  - acr_name                = "medicalapidevxea5yd" -> null
+  - aks_name                = "aks-medical-api-dev" -> null
+  - resource_group_location = "westeurope" -> null
+  - resource_group_name     = "rg-medical-api-dev" -> null
+
+  roceed:
+
+terraform destroy
+
+Destroy complete! Resources: 5 destroyed.
+
+Wait for:
+
+Destroy complete! Resources: 5 destroyed.
+
+Then verify:
+
+az group exists --name rg-medical-api-dev
+
+Expected:
+
+false
+
+
+Validate no more Azure AKS: https://portal.azure.com/#view/Microsoft_Azure_KubernetesFleet/KubernetesHub.MenuView/~/clusters
+
+
+validate no state and no resource in azure:
+
+PS D:\GitHub\FastApiArgoProject\terraform> terraform state list
+PS D:\GitHub\FastApiArgoProject\terraform> az group exists --name rg-medical-api-dev
+false
+
+
+Check that the AKS-managed Resource Group is also gone:
+
+az group list --query "[?starts_with(name, 'MC_rg-medical-api-dev_')].name" --output table
+
+Expected: empty output.
+
+3. Check AKS and ACR directly
+az aks list --query "[?name=='aks-medical-api-dev'].name" --output table
+az acr list --query "[?starts_with(name, 'medicalapidev')].name" --output table
+
+Both should return nothing.
+
+4. List every remaining Azure resource
+az resource list --output table
+
+If this subscription was used only for this project, ideally the output should be empty. If it shows anything, send the resource names and types before deleting them—some may be unrelated.
+
+5. Verify in Azure Portal
+
+Open Azure Portal:
+
+Go to All resources.
+Select the correct subscription.
+Clear all other filters.
+Confirm no project resources remain.
+Open Cost Management + Billing → Cost Management → Cost analysis.
+
+You may still see the cost already incurred by AKS and ACR before deletion. Cost reporting can arrive later; that does not mean the resources are still running. The important checks for future project charges are:
+
+Resource Group: absent
+AKS: absent
+ACR: absent
+Terraform state: empty
+
+Azure also shows remaining free-account credit under Cost Management when applicable. Microsoft’s Azure account guidance confirms that usage and remaining credit are visible there.
+
+For a complete check:
+
+az resource list --output table
+
+If the only resource shown is NetworkWatcher_eastus, you have no remaining project resources generating ongoing compute or registry charges.
+
+////////////////////WHY CDR FAILED when we deployed cluster ///////
+
+We can fix it declaratively with YAML, but we should use Argo CD’s official version-matched CRD rather than manually writing it:
+
+kubectl apply --server-side --force-conflicts `
+  -n argocd `
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+That installation YAML contains both the controllers and CRDs.
+
+Correct. The issue was not caused by our Medical API Helm YAML or Argo CD Application YAML.
+
+It was inside the Argo CD installation:
+
+Our Application YAML          ✅ Correct
+Our Helm chart                ✅ Correct
+Medical API deployment        ✅ Running
+Argo CD ApplicationSet CRD    ❌ Missing
+
+Argo CD is a third-party Kubernetes tool. Its official installation manifest was supposed to install both:
+
+argocd-applicationset-controller
+applicationsets.argoproj.io CRD
+
+The controller was installed, but its required CRD was not. This indicates a partial/incomplete Argo CD installation, not an application configuration error.
+
+Also, we were not using ApplicationSet; we used an ordinary Application. Therefore, the Medical API still deployed successfully.
+
+Next time we’ll install Argo CD with server-side apply, verify all three main CRDs, and only then create our Application:
+
+Next time we’ll install Argo CD with server-side apply, verify all three main CRDs, and only then create our Application:
+
+kubectl get crd applications.argoproj.io
+kubectl get crd applicationsets.argoproj.io
+kubectl get crd appprojects.argoproj.io
+
+rgo CD adds this new resource type by installing a CRD.
+
+Think of it like this:
+
+CRD = definition/template of a new Kubernetes resource
+CR  = actual resource created from that definition
+
+For example:
+
+applications.argoproj.io CRD
+            ↓ allows Kubernetes to understand
+kind: Application
+            ↓
+medical-api-aks Application
+
+The same applies to ApplicationSet:
+
+applicationsets.argoproj.io CRD
+            ↓ allows
+kind: ApplicationSet
+
+In our cluster, the ApplicationSet controller tried to work with:
+
+kind: ApplicationSet
+
+but its CRD was missing. Kubernetes effectively answered:
+
+I don't know what an ApplicationSet is.
+
+That caused the controller to restart.
+
+A simple OOP comparison:
+
+CRD             ≈ class definition
+Custom Resource ≈ object created from the class
+
+Our Application CRD existed, which is why medical-api-aks worked. Only the unused ApplicationSet CRD was missing.

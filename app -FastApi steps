@@ -544,7 +544,16 @@ medical-api-576b8d6578-mjfh5   3m           37Mi
 medical-api-576b8d6578-njdn6   3m           37Mi
 medical-api-576b8d6578-xrfm9   3m           37Mi
 
-and now they are terminating:
+and now they are terminating
+After deleting load-generator, CPU should fall. Kubernetes deliberately waits before scaling down to prevent rapid fluctuations.
+
+Watch it:
+
+kubectl get hpa -n medical-dev -w
+
+Eventually:
+
+4 replicas → 3 → 2 → 1
 
 PS C:\Users\User> kubectl get pods -n medical-dev -w
 NAME                           READY   STATUS    RESTARTS   AGE
@@ -570,3 +579,47 @@ medical-api-576b8d6578-mjfh5   0/1     Completed     0          9m1s
 PS C:\Users\User> kubectl get pods -n medical-dev -w
 NAME                           READY   STATUS    RESTARTS   AGE
 medical-api-576b8d6578-xrfm9   1/1     Running   1          3d22h
+
+
+Investigate why pod was restarted:
+
+One older Pod has restarted once:
+
+medical-api-...-xrfm9   RESTARTS 1
+
+You can investigate it with:
+
+kubectl describe pod medical-api-576b8d6578-xrfm9 -n medical-dev
+kubectl logs medical-api-576b8d6578-xrfm9 -n medical-dev --previous
+
+Phase 3 completed
+
+We now have:
+
+Namespace
+ConfigMap
+Deployment
+ClusterIP Service
+Readiness and liveness probes
+Resource requests and limits
+Non-root security context
+Metrics Server
+HPA tested successfully
+
+////////////////////////////////////////////////////////////////////
+
+After we created Azure registry and pushed there app image 1.0.0 version
+we are ready to do a next step is: steps will be mentioned at "app-FastApi AKS cluster with Terrafrom"
+
+The next step is create an AKS cluster with Terraform, connect it to ACR using AcrPull, and later deploy medical-api:1.0.1.
+
+We’ll do it safely in this order:
+
+Write the AKS Terraform configuration.
+Run terraform plan.
+Review exactly what Azure will create.
+Only then run terraform apply, because the AKS worker VM costs money.
+Deploy the image from ACR.
+Do not forget to Delete the resources with terraform destroy when practice is finished.
+
+/////////////////////////////////////////

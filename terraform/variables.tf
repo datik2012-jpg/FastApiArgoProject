@@ -22,3 +22,10 @@ variable "acr_location" {
   type        = string
   default     = "northeurope"
 }
+
+
+variable "aks_location" {
+  description = "Azure region for the AKS cluster"
+  type        = string
+  default     = "eastus"
+}

@@ -17,3 +17,8 @@ output "acr_login_server" {
   description = "Azure Container Registry login server"
   value       = azurerm_container_registry.main.login_server
 }
+
+output "aks_name" {
+  description = "AKS cluster name"
+  value       = azurerm_kubernetes_cluster.main.name
+}

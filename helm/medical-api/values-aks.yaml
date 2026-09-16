@@ -1,0 +1,4 @@
+image:
+  repository: medicalapidevxea5yd.azurecr.io/medical-api
+  tag: "1.0.1"
+  pullPolicy: IfNotPresent

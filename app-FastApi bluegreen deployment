@@ -1497,3 +1497,103 @@ Your blue-green changes are still local and Argo CD cannot see them yet. Before 
 modified: app-FastApi bluegreen deployment
 untracked: -o
 
+git add -A
+git status
+
+git status should show everything under Changes to be committed, including:
+
+Modified Helm files
+Deleted deployment.yaml
+New rollout.yaml
+app-FastApi bluegreen deployment
+
+Commit and push:
+
+git commit -m "Add blue-green deployment with Argo Rollouts"
+git push -u origin feature/blue-green-rollout
+
+Finally verify:
+
+git status
+
+Expected:
+
+On branch feature/blue-green-rollout
+Your branch is up to date with 'origin/feature/blue-green-rollout'.
+
+nothing to commit, working tree clean
+
+///////////////////////////////////Now we need create an ArgoCD app ////////////
+
+Now create a second Argo CD Application, but keep automatic sync disabled initially because the resources are already running under Helm.
+
+Create:
+
+argocd/medical-api-bluegreen-application.yaml
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: medical-api-bluegreen
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/datik2012-jpg/FastApiArgoProject.git
+    targetRevision: feature/blue-green-rollout
+    path: helm/medical-api
+
+    helm:
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: medical-bluegreen
+
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      jsonPointers:
+        - /spec/selector
+
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+
+
+Why ignoreDifferences is important: Argo Rollouts dynamically changes the active and preview Service selectors. Argo CD must not replace those selectors with the basic Helm values.
+
+Apply only the Application object:      
+
+PS D:\GitHub\FastApiArgoProject> kubectl apply -f .\argocd\medical-api-bluegreen-application.yaml
+application.argoproj.io/medical-api-bluegreen created
+
+Then verify:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get applications -n argocd `
+>>   -o custom-columns="APP:.metadata.name,NAMESPACE:.spec.destination.namespace,BRANCH:.spec.source.targetRevision,SYNC:.status.sync.status,HEALTH:.status.health.status"
+APP                     NAMESPACE           BRANCH                       SYNC     HEALTH
+medical-api             medical-argocd      main                         Synced   Healthy
+medical-api-bluegreen   medical-bluegreen   feature/blue-green-rollout   Synced   Healthy
+
+PS D:\GitHub\FastApiArgoProject> kubectl get applications -n argocd
+NAME                    SYNC STATUS   HEALTH STATUS
+medical-api             Synced        Healthy
+medical-api-bluegreen   Synced        Healthy
+
+
+
+It became Synced immediately because the existing Helm-created resources already match the manifests rendered by Argo CD. Synced does not necessarily mean Argo recreated anything—it found no meaningful difference.
+
+Verify the Rollout:
+
+kubectl get rollout medical-api-bluegreen -n medical-bluegreen
+
+PS D:\GitHub\FastApiArgoProject> kubectl get rollout medical-api-bluegreen -n medical-bluegreen
+NAME                    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+medical-api-bluegreen   1         1         1            1           3h34m

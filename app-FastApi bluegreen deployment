@@ -1,0 +1,8 @@
+Will implement BlueGreen rollout option for medical api
+
+1.Create new branch (i do not want do significat changes in the main branch, which still be Deployement rollout option)
+
+check git status: git status --short
+
+
+if empty - we can proceed

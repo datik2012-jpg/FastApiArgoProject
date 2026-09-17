@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: medical-api-bluegreen
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/datik2012-jpg/FastApiArgoProject.git
+    targetRevision: feature/blue-green-rollout
+    path: helm/medical-api
+
+    helm:
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: medical-bluegreen
+
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      jsonPointers:
+        - /spec/selector
+
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true

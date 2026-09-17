@@ -6,5 +6,5 @@ metadata:
     {{- include "medical-api.labels" . | nindent 4 }}
 data:
   APP_NAME: {{ .Values.config.appName | quote }}
-  APP_VERSION: {{ .Values.config.appVersion | quote }}
+  APP_VERSION: {{ .Values.image.tag | quote }}
   ENVIRONMENT: {{ .Values.config.environment | quote }}

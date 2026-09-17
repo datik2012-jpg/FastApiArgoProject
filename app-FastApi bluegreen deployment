@@ -1,3 +1,5 @@
+Publication note: Environment identifiers, local paths, IP addresses, and image digests below use illustrative XXX placeholders. Replace placeholders with your own values before running commands. Never paste actual passwords or tokens into these notes.
+
 Will implement BlueGreen rollout option for medical api
 
 1.Create new branch (i do not want do significat changes in the main branch, which still be Deployement rollout option)
@@ -6,3 +8,1492 @@ check git status: git status --short
 
 
 if empty - we can proceed
+
+
+create and switch to new branch:
+
+If the output is empty, create it:
+
+git switch -c feature/blue-green-rollout
+
+Verify:
+
+git branch --show-current
+
+Expected:
+
+feature/blue-green-rollout
+
+This gives us a safe flow:
+
+feature/blue-green-rollout
+→ implement and test locally
+→ review changes
+→ merge into main only when working
+
+Your current Argo CD Application tracks main, so branch changes will not affect its existing deployment automatically. For testing, we can create a separate local Argo CD Application that tracks feature/blue-green-rollout.
+
+
+//////////////////////////////////////////////////////////////////
+
+
+We need to Install ArgoCD Rollouts 
+
+Now install the Argo Rollouts controller in Docker Desktop.
+
+First verify both safeguards:
+
+Validate we are on correct branch: feature/blue-green-rollout
+
+git branch --show-current
+
+And the context is to Docker Desktop not to Azure AKS
+kubectl config current-context
+
+In case 
+
+You are still pointing to the deleted AKS cluster. Do not install anything yet.
+
+Start Docker Desktop(opend Docker Desktop app) and wait until Kubernetes is running. Then list contexts:
+
++
+
+if you see 127.0.0.1:6443 actively refused (kubectl get nodes)
+
+This normally means Docker Desktop is stopped or its Kubernetes component has not started.
+
+Do this:
+
+Open Docker Desktop.
+Wait until Docker Engine shows Running.
+Open Settings → Kubernetes.
+Confirm Enable Kubernetes is selected.
+Wait until Kubernetes shows Running.
+
+kubectl config get-contexts
+
+PS D:\Projects\projectXXX> kubectl config get-contexts
+CURRENT   NAME                  CLUSTER               AUTHINFO                                             NAMESPACE
+*         aks-clusterXXX   aks-clusterXXX   clusterUser_resource-groupXXX_aks-clusterXXX
+          docker-desktop        docker-desktop        docker-desktop
+
+Switch to Docker Desktop:
+
+kubectl config use-context docker-desktop
+
+PS D:\Projects\projectXXX> kubectl config use-context docker-desktop
+Switched to context "docker-desktop".
+
+
+
+Verify:
+
+kubectl config current-context
+
+PS D:\Projects\projectXXX> kubectl config current-context
+docker-desktop
+
+kubectl get nodes  
+
+PS D:\Projects\projectXXX> kubectl get nodes
+NAME             STATUS   ROLES           AGE   VERSION
+docker-desktop   Ready    control-plane   15d   v1.36.1
+
+Expected , if not go to Deocker Desktop and start there the cluster:
+
+then runa again: kubectl get nodes and expect to see: docker-desktop
+///////////////////////////////////////////////////////////////////
+
+
+Install Argo Rollouts locally:
+
+kubectl create namespace argo-rollouts
+
+PS D:\Projects\projectXXX> kubectl create namespace argo-rollouts
+namespace/argo-rollouts created
+
+To see all available namespaces:
+PS D:\Projects\projectXXX> kubectl get namespaces
+NAME              STATUS   AGE
+argo-rollouts     Active   2m23s
+argocd            Active   2d19h
+default           Active   15d
+kube-node-lease   Active   15d
+kube-public       Active   15d
+kube-system       Active   15d
+medical-argocd    Active   2d19h
+medical-dev       Active   6d22h
+medical-helm      Active   2d22h
+task-platform     Active   15d
+
+and:
+
+kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+
+Wait until the controller is available:
+
+kubectl rollout status deployment/argo-rollouts -n argo-rollouts --timeout=180s
+
+PS D:\Projects\projectXXX> kubectl rollout status deployment/argo-rollouts -n argo-rollouts --timeout=180s
+deployment "argo-rollouts" successfully rolled out
+
+
+
+Verify the controller and CRD:
+
+kubectl get pods -n argo-rollouts
+
+PS D:\Projects\projectXXX> kubectl get pods -n argo-rollouts
+NAME                             READY   STATUS    RESTARTS   AGE
+argo-rollouts-78d84ff54d-zq9xl   1/1     Running   0          3m32s
+
+kubectl get crd rollouts.argoproj.io
+
+Both must be healthy before we change the Medical API from a Deployment into a Rollout.
+
+PS D:\Projects\projectXXX> kubectl get pods -n argo-rollouts
+NAME                             READY   STATUS    RESTARTS   AGE
+argo-rollouts-78d84ff54d-zq9xl   1/1     Running   0          3m32s
+PS D:\Projects\projectXXX> kubectl get crd rollouts.argoproj.io
+Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "rollouts.argoproj.io" not found
+
+We have an issue with CRD (some object)
+A running controller Pod only means its process started. Kubernetes still does not understand:
+
+kind: Rollout
+
+Need:
+Reapply the official manifest using server-side apply:
+
+kubectl apply --server-side --force-conflicts -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+and check again pods anb CRD:
+
+PS D:\Projects\projectXXX> kubectl get pods -n argo-rollouts
+NAME                             READY   STATUS    RESTARTS   AGE
+argo-rollouts-78d84ff54d-zq9xl   1/1     Running   0          14m
+PS D:\Projects\projectXXX> kubectl get crd rollouts.argoproj.io
+NAME                   CREATED AT
+rollouts.argoproj.io   2026-09-17T07:23:25Z
+
+Then check all Argo Rollouts CRDs:
+
+kubectl get crd | Select-String "argoproj.io"
+
+PS D:\Projects\projectXXX> kubectl get crd | Select-String "argoproj.io"
+
+analysisruns.argoproj.io               2026-09-17T07:23:19Z
+analysistemplates.argoproj.io          2026-09-17T07:08:54Z
+applications.argoproj.io               2026-09-14T11:30:35Z
+appprojects.argoproj.io                2026-09-14T11:30:40Z
+clusteranalysistemplates.argoproj.io   2026-09-17T07:08:55Z
+experiments.argoproj.io                2026-09-17T07:08:55Z
+rollouts.argoproj.io                   2026-09-17T07:23:25Z
+
+Restart the controller so it refreshes its API discovery:
+
+kubectl rollout restart deployment/argo-rollouts -n argo-rollouts
+kubectl rollout status deployment/argo-rollouts -n argo-rollouts --timeout=180s
+
+
+PS D:\Projects\projectXXX> kubectl rollout restart deployment/argo-rollouts -n argo-rollouts
+deployment.apps/argo-rollouts restarted
+PS D:\Projects\projectXXX> kubectl rollout status deployment/argo-rollouts -n argo-rollouts --timeout=180s
+deployment "argo-rollouts" successfully rolled out
+PS D:\Projects\projectXXX> kubectl get pods -n argo-rollouts
+NAME                             READY   STATUS    RESTARTS   AGE
+argo-rollouts-666b6bd44d-s6wsg   1/1     Running   0          18s
+PS D:\Projects\projectXXX> kubectl get crd | Select-String "argoproj.io"
+
+analysisruns.argoproj.io               2026-09-17T07:23:19Z
+analysistemplates.argoproj.io          2026-09-17T07:08:54Z
+applications.argoproj.io               2026-09-14T11:30:35Z
+appprojects.argoproj.io                2026-09-14T11:30:40Z
+clusteranalysistemplates.argoproj.io   2026-09-17T07:08:55Z
+experiments.argoproj.io                2026-09-17T07:08:55Z
+rollouts.argoproj.io                   2026-09-17T07:23:25Z
+
+Now we are good!!!
+
+The Argo Rollouts installation is now healthy:
+
+Controller: 1/1 Running
+Restart count: 0
+Required Rollouts CRDs are present:
+rollouts
+analysisruns
+analysistemplates
+clusteranalysistemplates
+experiments
+
+The list still does not contain applicationsets.argoproj.io, but that belongs to Argo CD’s optional ApplicationSet controller and is unrelated to our Blue-Green Rollout.
+
+////////////////////////////////////////////////////////
+
+
+Now inspect the existing Deployment template:
+
+Get-Content .\helm\medical-api\templates\deployment.yaml
+
+there kind: Deployement a the moment and we need to check it to Rollout
+
+and
+
+You already changed kind to Rollout, but one important line is still wrong:
+
+apiVersion: apps/v1
+
+Rollout is not built into Kubernetes. It belongs to the Argo Rollouts API, so change it to:
+
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+
+in additional need to add BlueGReen :
+
+Then add the Blue-Green strategy under spec, after replicas:
+
+spec:
+  replicas: {{ .Values.replicaCount }}
+
+  strategy:
+    blueGreen:
+      activeService: {{ include "medical-api.fullname" . }}-active
+      previewService: {{ include "medical-api.fullname" . }}-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
+
+  selector:
+
+so final deployment version should be:
+
+
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+
+metadata:
+  name: {{ include "medical-api.fullname" . }}
+  labels:
+    {{- include "medical-api.labels" . | nindent 4 }}
+
+spec:
+  replicas: {{ .Values.replicaCount }}
+
+  strategy:
+    blueGreen:
+      activeService: {{ include "medical-api.fullname" . }}-active
+      previewService: {{ include "medical-api.fullname" . }}-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
+
+  selector:
+    matchLabels:
+      {{- include "medical-api.selectorLabels" . | nindent 6 }}
+
+  template:
+    metadata:
+      labels:
+        {{- include "medical-api.selectorLabels" . | nindent 8 }}
+
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+
+          envFrom:
+            - configMapRef:
+                name: {{ include "medical-api.fullname" . }}-config
+
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+
+
+
+
+For clarity, rename the template:
+
+Rename-Item .\helm\medical-api\templates\deployment.yaml rollout.yaml 
+
+
+Then validate the rendered type:
+
+helm template medical-api .\helm\medical-api | Select-String "apiVersion: argoproj.io|kind: Rollout|activeService|previewService"
+
+PS D:\Projects\projectXXX> helm template medical-api .\helm\medical-api | Select-String "apiVersion: argoproj.io|kind: Rollout|activeService|previewService"
+
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+      activeService: medical-api-active
+      previewService: medical-api-preview
+
+
+Perfect—the Rollout template now renders correctly:
+
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+activeService: medical-api-active
+previewService: medical-api-preview
+
+///////////////////////////////////////////////////////////////////////
+
+Now we need two Services with exactly those names. Show the existing Service template:
+
+Get-Content .\helm\medical-api\templates\service.yaml
+
+corrent version:
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: {{ include "medical-api.fullname" . }}
+  labels:
+    {{- include "medical-api.labels" . | nindent 4 }}
+
+spec:
+  type: {{ .Values.service.type }}
+
+  selector:
+    {{- include "medical-api.selectorLabels" . | nindent 4 }}
+
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+
+
+Replace service.yaml with two Services separated by ---.      
+
+
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: {{ include "medical-api.fullname" . }}-active
+  labels:
+    {{- include "medical-api.labels" . | nindent 4 }}
+
+spec:
+  type: {{ .Values.service.type }}
+
+  selector:
+    {{- include "medical-api.selectorLabels" . | nindent 4 }}
+
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+
+---
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: {{ include "medical-api.fullname" . }}-preview
+  labels:
+    {{- include "medical-api.labels" . | nindent 4 }}
+
+spec:
+  type: {{ .Values.service.type }}
+
+  selector:
+    {{- include "medical-api.selectorLabels" . | nindent 4 }}
+
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+
+
+The initial selectors are identical. Argo Rollouts will automatically add a version-specific selector:
+
+rollouts-pod-template-hash: ...
+
+This makes the Services point to different versions:
+
+medical-api-active  → current stable ReplicaSet
+medical-api-preview → new ReplicaSet
+
+Validate the rendered Service names:
+
+PS D:\Projects\projectXXX> helm template medical-api .\helm\medical-api | Select-String "kind: Service|name: medical-api-active|name: medical-api-preview"
+
+kind: Service
+  name: medical-api-active
+kind: Service
+  name: medical-api-preview
+
+
+Expected:
+
+kind: Service
+name: medical-api-active
+kind: Service
+name: medical-api-preview
+
+////////////////////////////////////////////////////////////////////
+
+We must update the HPA because it currently targets a Kubernetes Deployment, which no longer exists. Show it with:
+
+Get-Content .\helm\medical-api\templates\hpa.yaml
+
+current version:
+
+{{- if .Values.autoscaling.enabled }}
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+
+metadata:
+  name: {{ include "medical-api.fullname" . }}
+  labels:
+    {{- include "medical-api.labels" . | nindent 4 }}
+
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "medical-api.fullname" . }}
+
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+
+{{- end }}
+
+
+
+Change only scaleTargetRef. The HPA must now scale the Argo Rollout, not the removed Deployment.
+
+spec:
+  scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    name: {{ include "medical-api.fullname" . }}
+
+
+save and now need to validate intire Helm  chart
+
+Now validate the entire chart:
+
+helm lint .\helm\medical-api
+
+output:
+
+PS D:\Projects\projectXXX> helm lint .\helm\medical-api
+==> Linting .\helm\medical-api
+[INFO] Chart.yaml: icon is recommended
+
+1 chart(s) linted, 0 chart(s) failed
+
+NOte: It is not an error and does not affect deployment.
+
+////////////////////////////////////////////////////////
+Now perform a Helm dry run in the isolated namespace:
+
+
+PS D:\Projects\projectXXX> helm upgrade --install medical-api-bluegreen .\helm\medical-api --namespace medical-bluegreen --create-namespace --dry-run
+level=WARN msg="--dry-run is deprecated and should be replaced with '--dry-run=client'"
+Release "medical-api-bluegreen" does not exist. Installing it now.
+NAME: medical-api-bluegreen
+LAST DEPLOYED: Thu Sep 17 11:06:16 2026
+NAMESPACE: medical-bluegreen
+STATUS: pending-install
+REVISION: 1
+DESCRIPTION: Dry run complete
+TEST SUITE: None
+HOOKS:
+MANIFEST:
+---
+# Source: medical-api/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medical-api-bluegreen-config
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api-bluegreen
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  APP_NAME: "Medical Appointment API"
+  APP_VERSION: "1.0.1"
+  ENVIRONMENT: "development"
+---
+# Source: medical-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: medical-api-bluegreen-active
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api-bluegreen
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api-bluegreen
+
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+
+
+---
+# Source: medical-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: medical-api-bluegreen-preview
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api-bluegreen
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api-bluegreen
+
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+# Source: medical-api/templates/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+
+metadata:
+  name: medical-api-bluegreen
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api-bluegreen
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    name: medical-api-bluegreen
+
+  minReplicas: 1
+  maxReplicas: 4
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+---
+# Source: medical-api/templates/rollout.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+
+metadata:
+  name: medical-api-bluegreen
+  labels:
+    helm.sh/chart: medical-api-0.1.0
+    app.kubernetes.io/name: medical-api
+    app.kubernetes.io/instance: medical-api-bluegreen
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/managed-by: Helm
+
+spec:
+  replicas: 1
+
+  strategy:
+    blueGreen:
+      activeService: medical-api-bluegreen-active
+      previewService: medical-api-bluegreen-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: medical-api
+      app.kubernetes.io/instance: medical-api-bluegreen
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: medical-api
+        app.kubernetes.io/instance: medical-api-bluegreen
+
+    spec:
+      containers:
+        - name: medical-api
+
+          image: "medical-api:1.0.1"
+          imagePullPolicy: Never
+
+          ports:
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: medical-api-bluegreen-config
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+The dry run is correct. All important references match:
+
+Rollout:        medical-api-bluegreen
+Active Service: medical-api-bluegreen-active
+Preview Service: medical-api-bluegreen-preview
+HPA target:     medical-api-bluegreen Rollout
+Image:          medical-api:1.0.1
+
+
+
+The warning only means Helm 4 prefers:
+
+--dry-run=client
+
+It did not affect validation.
+
+Because the chart uses:
+
+imagePullPolicy: Never
+
+confirm that the image exists inside Docker Desktop:
+
+docker image inspect medical-api:1.0.1
+
+PS D:\Projects\projectXXX> docker image inspect medical-api:1.0.1
+[
+    {
+        "Id": "sha256:IMAGE_DIGEST_XXX",
+        "RepoTags": [
+            "medical-api:1.0.1",
+            "registryXXX.azurecr.io/medical-api:1.0.1"
+        ],
+        "RepoDigests": [
+            "medical-api@sha256:IMAGE_DIGEST_XXX",
+            "registryXXX.azurecr.io/medical-api@sha256:IMAGE_DIGEST_XXX"
+
+If that returns image information, install the release:
+
+Note:
+
+We created this namespace earlier:
+
+argo-rollouts
+
+That namespace contains the Argo Rollouts controller.
+
+The command is referring to a different namespace:
+
+medical-bluegreen
+
+That namespace will contain the Medical API experiment.
+
+
+If that returns image information, install the release:
+
+helm upgrade --install medical-api-bluegreen .\helm\medical-api --namespace medical-bluegreen --create-namespace
+
+Then inspect the initial rollout:
+
+
+PS D:\Projects\projectXXX> helm upgrade --install medical-api-bluegreen .\helm\medical-api --namespace medical-bluegreen --create-namespace
+Release "medical-api-bluegreen" does not exist. Installing it now.
+NAME: medical-api-bluegreen
+LAST DEPLOYED: Thu Sep 17 11:17:30 2026
+NAMESPACE: medical-bluegreen
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+
+
+
+kubectl get rollout -n medical-bluegreen
+kubectl get pods -n medical-bluegreen
+kubectl get services -n medical-bluegreen
+kubectl get hpa -n medical-bluegreen
+
+
+PS D:\Projects\projectXXX> kubectl get rollout -n medical-bluegreen
+NAME                    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+medical-api-bluegreen   1         1         1            1           2m4s
+PS D:\Projects\projectXXX> kubectl get pods -n medical-bluegreen
+NAME                                     READY   STATUS    RESTARTS   AGE
+medical-api-bluegreen-6c7dcd4b66-gvngk   1/1     Running   0          2m4s
+PS D:\Projects\projectXXX> kubectl get services -n medical-bluegreen
+NAME                            TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+medical-api-bluegreen-active    ClusterIP   SERVICE_IP_ACTIVE_XXX   <none>        80/TCP    2m22s
+medical-api-bluegreen-preview   ClusterIP   SERVICE_IP_PREVIEW_XXX    <none>        80/TCP    2m22s
+PS D:\Projects\projectXXX> kubectl get hpa -n medical-bluegreen
+NAME                    REFERENCE                       TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+medical-api-bluegreen   Rollout/medical-api-bluegreen   cpu: 4%/60%   1         4         1          2m30s
+
+
+
+PS D:\Projects\projectXXX> helm status medical-api-bluegreen -n medical-bluegreen
+NAME: medical-api-bluegreen
+LAST DEPLOYED: Thu Sep 17 11:17:30 2026
+NAMESPACE: medical-bluegreen
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+RESOURCES:
+==> v1/ConfigMap
+NAME                           DATA   AGE
+medical-api-bluegreen-config   3      6m6s
+
+==> v1/Service
+NAME                           TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+medical-api-bluegreen-active   ClusterIP   SERVICE_IP_ACTIVE_XXX   <none>        80/TCP    6m6s
+medical-api-bluegreen-preview   ClusterIP   SERVICE_IP_PREVIEW_XXX   <none>   80/TCP   6m6s
+
+==> v2/HorizontalPodAutoscaler
+NAME                    REFERENCE                       TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+medical-api-bluegreen   Rollout/medical-api-bluegreen   cpu: 3%/60%   1         4         1          6m5s
+
+==> v1alpha1/Rollout
+NAME                    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+medical-api-bluegreen   1         1         1            1           6m5s
+
+
+How to check the app is UP ?
+
+
+Now verify the application itself responds over HTTP.
+
+Terminal 1:
+
+kubectl port-forward service/medical-api-bluegreen-active -n medical-bluegreen 8080:80
+
+Keep it open.
+
+Terminal 2:
+
+Invoke-RestMethod http://127.0.0.1:8080/health
+
+Then:
+
+Invoke-RestMethod http://127.0.0.1:8080/ready
+
+You can also open Swagger:
+
+http://127.0.0.1:8080/docs
+
+On the first deployment, there is no old Blue version yet, so version 1.0.1 becomes the initial active version. The real Blue-Green behavior begins when we deploy a second image, such as 1.0.2.
+
+Two Services are the core of Blue-Green deployment.
+
+medical-api-bluegreen-active — receives normal user/production traffic.
+medical-api-bluegreen-preview — lets us test the new version before users receive it.
+
+Right now, only version 1.0.1 exists, so both Services may point to the same Pod.
+
+After deploying 1.0.2:
+
+Active Service  → Blue Pod  → 1.0.1
+Preview Service → Green Pod → 1.0.2
+
+///////////////////////////////My question how to check which service points to the pod ///////
+
+how to know to which pod points a service
+
+A Service does not point directly to a Pod name. It selects Pods using labels, and Kubernetes creates EndpointSlices containing their IP addresses.
+
+1. See the Service selector
+kubectl get service medical-api-bluegreen-active -n medical-bluegreen -o jsonpath="{.spec.selector}"
+2. See the exact Pod behind the Active Service
+kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-active -o jsonpath="{range .items[*].endpoints[*]}{.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+
+Example:
+
+medical-api-bluegreen-7d86c59d67-abc12 -> POD_IP_EXAMPLE_XXX
+
+For Preview:
+
+kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-preview -o jsonpath="{range .items[*].endpoints[*]}{.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+
+You can compare those addresses with the Pods:
+
+kubectl get pods -n medical-bluegreen -o wide
+
+The relationship is:
+
+Service selector
+→ matching Pod labels
+→ EndpointSlice
+→ Pod IP
+
+Right now, Active and Preview may show the same Pod because only the initial version exists. After deploying 1.0.2, they should show different Pods until promotion.
+
+/////////////////////////////Question why not ArgoCD used for bluegreen /////
+
+
+
+
+
+Argo CD alone does not perform Blue-Green switching. It only makes the cluster match what is stored in Git.
+
+The responsibilities are:
+
+Argo CD       → Git synchronization
+Helm          → generates Kubernetes manifests
+Argo Rollouts → manages Blue/Green Pods and switches Services
+
+We used Helm directly because we are currently testing the unfinished chart safely on the feature branch:
+
+feature/blue-green-rollout
+
+Your existing Argo CD Application still tracks:
+
+targetRevision: main
+
+Therefore, Argo CD cannot see our unmerged Blue-Green changes yet.
+
+The completed flow will be:
+
+Push new image/tag to Git
+        ↓
+Argo CD detects Git change
+        ↓
+Argo CD renders the Helm chart
+        ↓
+Argo Rollouts creates Green Pods
+        ↓
+Preview Service tests Green
+        ↓
+Promotion switches Active Service
+
+So we are not replacing Argo CD. We are first proving that the Rollout chart works with Helm. After testing version 1.0.2, we will create a separate local Argo CD Application that tracks:
+
+targetRevision: feature/blue-green-rollout
+
+Then Argo CD will manage the Blue-Green Helm release, and we will stop running helm upgrade manually. This staged approach prevents Argo CD from repeatedly applying an incomplete chart while we are still editing it.
+
+
+///////////////////////NExt step create new image version and next steps //////////
+
+
+Next we need deploy a second version, 1.0.2, while 1.0.1 continues receiving Active traffic.
+
+For the first Blue-Green test, we can reuse the same application code but create a new image tag. This tests the deployment mechanism without introducing an application bug.
+
+Create the new local tag: docker tag medical-api:1.0.1 medical-api:1.0.2
+
+Verify both versions:
+
+docker images medical-api
+
+PS D:\Projects\projectXXX> docker images medical-api
+                                                                                                    i Info →   U  In Use
+IMAGE               ID             DISK USAGE   CONTENT SIZE   EXTRA
+medical-api:1.0.0   7ae1a839783c        384MB         88.9MB
+medical-api:1.0.1   IMAGE_ID_XXX        384MB         88.9MB    U
+medical-api:1.0.2   IMAGE_ID_XXX        384MB         88.9MB    U
+
+
+
+Do not change values.yaml yet. Before triggering the rollout, record which Pod both Services currently target for active and preview:
+
+kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-active -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-preview -o jsonpath="{range .items[*].endpoints[*]}PREVIEW: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+
+
+S D:\Projects\projectXXX> kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-active -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+ACTIVE: medical-api-bluegreen-6c7dcd4b66-gvngk -> POD_IP_BLUE_XXX
+PS D:\Projects\projectXXX> kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-preview -o jsonpath="{range .items[*].endpoints[*]}PREVIEW: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+PREVIEW: medical-api-bluegreen-6c7dcd4b66-gvngk -> POD_IP_BLUE_XXX
+PS D:\Projects\projectXXX>
+
+At this initial stage, they should point to the same 1.0.1 Pod. After that, we’ll change the tag to 1.0.2, run the Helm upgrade, and observe Active staying on 1.0.1 while Preview moves to 1.0.2.
+
+
+Good—the starting state is confirmed:
+
+Active  → 1.0.1 Pod
+Preview → same 1.0.1 Pod
+
+1.0.1 and 1.0.2 currently have the same image ID because 1.0.2 is a new tag for the same image. Kubernetes will still create a new ReplicaSet because the image name in the Pod template changes.
+
+Update helm/medical-api/values.yaml:
+
+For this release, use:
+
+image:
+  repository: medical-api
+  tag: "1.0.2"
+  pullPolicy: Never
+
+config:
+  appName: "Medical Appointment API"
+  appVersion: "1.0.2"
+  environment: "development"
+
+These values have different jobs:
+
+Value	Purpose
+image.tag	Determines which Docker image Kubernetes runs
+config.appVersion	Passed to the FastAPI application through the ConfigMap
+Chart.yaml appVersion	Helm metadata and labels; usually informational
+
+However, manually repeating the same version creates a risk:
+
+image.tag:        1.0.2
+config.appVersion: 1.0.1  ← accidental mismatch
+
+A better design is to make the image tag the single source of truth. In configmap.yaml, change:
+
+APP_VERSION: {{ .Values.config.appVersion | quote }}
+
+to:
+
+APP_VERSION: {{ .Values.image.tag | quote }}
+
+Then remove this from values.yaml:
+
+appVersion: "1.0.1"
+
+Afterward, every release requires changing only:
+
+image:
+  tag: "1.0.2"
+
+For the current test, update both values first; we can perform the single-source cleanup after proving the Blue-Green switch.
+
+/////////////////////////////////validate helm rendering version tag ////////
+
+
+Now verify Helm renders 1.0.2 consistently:
+
+PS D:\Projects\projectXXX> helm template medical-api-bluegreen .\helm\medical-api | Select-String 'image:|APP_VERSION:|app.kubernetes.io/version:'
+
+    app.kubernetes.io/version: "1.0.1"
+  APP_VERSION: "1.0.2"
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/version: "1.0.1"
+    app.kubernetes.io/version: "1.0.1"
+          image: "medical-api:1.0.2"
+
+The actual runtime values are correct:
+
+APP_VERSION: 1.0.2
+image: medical-api:1.0.2
+
+But the Helm metadata labels still show 1.0.1 because Chart.yaml was not updated. 
+
+Open:
+
+helm/medical-api/Chart.yaml
+
+Change:
+
+appVersion: "1.0.1"
+
+to:
+
+appVersion: "1.0.2"
+
+Note why not to update "version" in the chart.yaml
+
+They represent two different things:
+
+version: 0.1.0
+
+is the Helm chart version—the version of Kubernetes deployment logic.
+
+appVersion: "1.0.1"
+
+is the application version—the version of Medical API being deployed.
+
+///////////////////////RUN Validation again ////////////
+
+PS D:\Projects\projectXXX> helm template medical-api-bluegreen .\helm\medical-api | Select-String 'image:|APP_VERSION:|app.kubernetes.io/version:'
+
+    app.kubernetes.io/version: "1.0.2"
+  APP_VERSION: "1.0.2"
+    app.kubernetes.io/version: "1.0.2"
+    app.kubernetes.io/version: "1.0.2"
+    app.kubernetes.io/version: "1.0.2"
+    app.kubernetes.io/version: "1.0.2"
+
+
+The application metadata is consistent at 1.0.2.
+
+The image line did not appear in this output, so verify the Rollout template separately before upgrading:
+
+helm template medical-api-bluegreen .\helm\medical-api --show-only templates/rollout.yaml | Select-String "image:"
+
+Expected:
+
+image: "medical-api:1.0.2"
+
+
+
+///////////////////////////////////////////
+
+
+If correct, run:
+
+helm upgrade medical-api-bluegreen .\helm\medical-api -n medical-bluegreen
+
+Failed:
+
+PS D:\Projects\projectXXX> helm upgrade medical-api-bluegreen .\helm\medical-api -n medical-bluegreen
+level=WARN msg="upgrade failed" name=medical-api-bluegreen error="conflict occurred while applying object medical-bluegreen/medical-api-bluegreen-active /v1, Kind=Service: Apply failed with 1 conflict: conflict with \"rollouts-controller\" using v1: .spec.selector && conflict occurred while applying object medical-bluegreen/medical-api-bluegreen-preview /v1, Kind=Service: Apply failed with 1 conflict: conflict with \"rollouts-controller\" using v1: .spec.selector"
+Error: UPGRADE FAILED: conflict occurred while applying object medical-bluegreen/medical-api-bluegreen-active /v1, Kind=Service: Apply failed with 1 conflict: conflict with "rollouts-controller" using v1: .spec.selector && conflict occurred while applying object medical-bluegreen/medical-api-bluegreen-preview /v1, Kind=Service: Apply failed with 1 conflict: conflict with "rollouts-controller" using v1: .spec.selector
+
+This is an expected ownership conflict between Helm 4 and Argo Rollouts:
+
+Helm created .spec.selector
+→ Argo Rollouts added the ReplicaSet hash
+→ Helm 4 detected another controller owns that field
+→ upgrade stopped safely
+
+The application should still be running on 1.0.1; the failed upgrade did not complete.
+
+Confirm:
+
+The application itself is not down. Both Pods are healthy:
+
+Old Pod remains available.
+New Pod was created.
+Helm marked the release failed because it could not take ownership of the Service selectors.
+
+The upgrade was partially applied:
+
+Rollout and new Pod updated ✅
+Service selector ownership conflict ❌
+Helm revision marked failed
+
+
+
+
+
+Do not rollback or delete anything yet. First inspect the actual state:
+
+PS D:\Projects\projectXXX> kubectl get pods -n medical-bluegreen -o custom-columns="POD:.metadata.name,IMAGE:.spec.containers[0].image,READY:.status.containerStatuses[0].ready"
+POD                                      IMAGE               READY
+medical-api-bluegreen-5db8fbddc7-rntzc   medical-api:1.0.2   true
+medical-api-bluegreen-6c7dcd4b66-gvngk   medical-api:1.0.1   true
+
+This confirms Blue-Green created both versions correctly:
+
+Blue/Active candidate:  medical-api:1.0.1
+Green/Preview candidate: medical-api:1.0.2
+
+Confirm the application version environment inside each Pod:
+
+kubectl exec -n medical-bluegreen medical-api-bluegreen-6c7dcd4b66-gvngk -- printenv APP_VERSION
+
+Expected:
+
+1.0.1
+kubectl exec -n medical-bluegreen medical-api-bluegreen-5db8fbddc7-rntzc -- printenv APP_VERSION
+
+Expected:
+
+1.0.2
+
+
+PS D:\Projects\projectXXX> kubectl exec -n medical-bluegreen medical-api-bluegreen-6c7dcd4b66-gvngk -- printenv APP_VERSION
+1.0.1
+PS D:\Projects\projectXXX> kubectl exec -n medical-bluegreen medical-api-bluegreen-5db8fbddc7-rntzc -- printenv APP_VERSION
+1.0.2
+
+The two versions are correctly separated:
+
+Old Blue Pod  → APP_VERSION=1.0.1
+New Green Pod → APP_VERSION=1.0.2
+
+Now confirm which Service points to which Pod:
+
+kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-active -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-preview -o jsonpath="{range .items[*].endpoints[*]}PREVIEW: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+
+Expected:
+
+ACTIVE  → ...6c7dcd4b66... → version 1.0.1
+PREVIEW → ...5db8fbddc7... → version 1.0.2
+
+PS D:\Projects\projectXXX> kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-active -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+ACTIVE: medical-api-bluegreen-6c7dcd4b66-gvngk -> POD_IP_BLUE_XXX
+PS D:\Projects\projectXXX> kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-preview -o jsonpath="{range .items[*].endpoints[*]}PREVIEW: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+PREVIEW: medical-api-bluegreen-5db8fbddc7-rntzc -> POD_IP_GREEN_XXX
+
+
+Then repair Helm’s failed release status:
+
+helm upgrade medical-api-bluegreen .\helm\medical-api -n medical-bluegreen --force-conflicts=true
+
+Verify:
+
+helm status medical-api-bluegreen -n medical-bluegreen
+
+
+PS D:\Projects\projectXXX> helm status medical-api-bluegreen -n medical-bluegreen
+NAME: medical-api-bluegreen
+LAST DEPLOYED: Thu Sep 17 12:15:06 2026
+NAMESPACE: medical-bluegreen
+STATUS: deployed
+REVISION: 4
+DESCRIPTION: Upgrade complete
+RESOURCES:
+==> v1/ConfigMap
+NAME                           DATA   AGE
+medical-api-bluegreen-config   3      58m
+
+==> v1/Service
+NAME                           TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+medical-api-bluegreen-active   ClusterIP   SERVICE_IP_ACTIVE_XXX   <none>        80/TCP    58m
+medical-api-bluegreen-preview   ClusterIP   SERVICE_IP_PREVIEW_XXX   <none>   80/TCP   58m
+
+==> v2/HorizontalPodAutoscaler
+NAME                    REFERENCE                       TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+medical-api-bluegreen   Rollout/medical-api-bluegreen   cpu: 4%/60%   1         4         1          58m
+
+==> v1alpha1/Rollout
+NAME                    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+medical-api-bluegreen   1         2         1            1           58m
+
+
+
+The Blue-Green state is now exactly correct:
+
+Active Service  → old Pod → 1.0.1
+Preview Service → new Pod → 1.0.2
+Helm release    → deployed
+
+Now test the Green version before promotion.
+
+Terminal 1:
+
+kubectl port-forward service/medical-api-bluegreen-preview -n medical-bluegreen 8081:80
+
+Keep it open.
+
+Terminal 2:
+
+Invoke-RestMethod http://127.0.0.1:8081/health
+Invoke-RestMethod http://127.0.0.1:8081/ready
+
+You can also open:
+
+http://127.0.0.1:8081/docs
+
+anfter some time first version pod will be destryed:
+
+PS D:\Projects\projectXXX> kubectl get replicasets -n medical-bluegreen
+NAME                               DESIRED   CURRENT   READY   AGE
+medical-api-bluegreen-5db8fbddc7   1         1         1       21m
+medical-api-bluegreen-6c7dcd4b66   0         0         0       71m
+
+
+chech endpoints both services should look to the same pod again:
+
+PS D:\Projects\projectXXX> kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-active -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+ACTIVE: medical-api-bluegreen-5db8fbddc7-rntzc -> POD_IP_GREEN_XXX
+
+PS D:\Projects\projectXXX> kubectl get endpointslice -n medical-bluegreen -l kubernetes.io/service-name=medical-api-bluegreen-preview -o jsonpath="{range .items[*].endpoints[*]}PREVIEW: {.targetRef.name}{' -> '}{.addresses[0]}{'\n'}{end}"
+PREVIEW: medical-api-bluegreen-5db8fbddc7-rntzc -> POD_IP_GREEN_XXX
+
+///////////////////Sometimes we do not want old pod be dleeted 1.0.1 version adn need osme time for testing or checks ///////////////
+
+Yes. That is exactly what autoPromotionEnabled: false is intended to do.
+
+There are two different periods.
+
+Before promotion
+
+With:
+
+autoPromotionEnabled: false
+
+Argo Rollouts should keep both versions running indefinitely:
+
+Active Service  → 1.0.1
+Preview Service → 1.0.2
+Rollout          → Paused
+
+You can take as long as needed to:
+
+test /health and /ready;
+run API tests;
+inspect logs;
+perform manual QA;
+verify database compatibility.
+
+Version 1.0.1 should remain Active until you explicitly promote 1.0.2.
+
+If Green fails testing, abort it instead of promoting:
+
+kubectl argo rollouts abort medical-api-bluegreen -n medical-bluegreen
+After promotion
+
+After you promote, Active traffic switches to 1.0.2. This controls how long 1.0.1 remains running afterward:
+
+scaleDownDelaySeconds: 30
+
+Currently it waits only 30 seconds. For a longer post-promotion verification period, change it to five or ten minutes:
+
+strategy:
+  blueGreen:
+    activeService: {{ include "medical-api.fullname" . }}-active
+    previewService: {{ include "medical-api.fullname" . }}-preview
+    autoPromotionEnabled: false
+    scaleDownDelaySeconds: 600
+
+600 means the old version remains running for ten minutes after the Service switches.
+
+Recommended flow:
+
+Deploy 1.0.2 Preview
+→ keep 1.0.1 Active indefinitely
+→ run full tests against Preview
+→ manually promote
+→ keep 1.0.1 alive for another 10 minutes
+→ monitor 1.0.2
+→ scale down 1.0.1
+
+For your project:
+
+Keep autoPromotionEnabled: false.
+Increase scaleDownDelaySeconds from 30 to 600.
+Test Green before promotion.
+Promote only after tests pass.
+
+Our 1.0.1 disappeared unexpectedly because Helm’s --force-conflicts interfered with the Service selectors. Once Argo CD is configured to ignore the Rollouts-managed selector fields, the normal manual-promotion behavior should work correctly.
+
+all these in the rollout.yaml should be modified in case we want to keep 1.0.1:
+
+  strategy:
+    blueGreen:
+      activeService: {{ include "medical-api.fullname" . }}-active
+      previewService: {{ include "medical-api.fullname" . }}-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 600
+
+/////////////////////////////////////////////////////////
+
+
+he flow we used was:
+
+You ran helm upgrade
+        ↓
+Helm rendered the chart
+        ↓
+Helm created/updated the Rollout resource
+        ↓
+Argo Rollouts controller saw the Rollout
+        ↓
+Argo Rollouts created Blue and Green ReplicaSets
+        ↓
+Argo Rollouts controlled Active/Preview Services
+
+There are two separate Argo products:
+
+Tool	Current role
+Argo CD	Not managing this medical-bluegreen test
+Argo Rollouts	Performing the Blue-Green rollout
+
+Your existing Argo CD Application manages medical-argocd, not medical-bluegreen.
+
+The final GitOps flow will be:
+
+Change image tag in Git
+        ↓
+Argo CD detects the commit
+        ↓
+Argo CD renders the Helm chart
+        ↓
+Argo CD applies the Rollout resource
+        ↓
+Argo Rollouts creates and manages Blue/Green
+        ↓
+We test Preview
+        ↓
+Argo Rollouts promotes Green
+
+So:
+
+Helm defines what the Rollout should look like.
+Argo CD delivers that Helm configuration from Git.
+Argo Rollouts performs the actual Blue-Green process.
+
+We used Helm manually first to verify that the chart works. The next project stage is to commit the feature branch and create an Argo CD Application that tracks that branch, replacing manual helm upgrade commands.
+
+//////////////////////URL to the current ArgoCD ui and see what is controlling //////////
+
+
+Your current Argo CD is running inside Docker Desktop. First verify the context and server:
+
+PS D:\Projects\projectXXX> kubectl config current-context
+docker-desktop
+PS D:\Projects\projectXXX> kubectl get pods -n argocd
+NAME                                                READY   STATUS    RESTARTS         AGE
+argocd-application-controller-0                     1/1     Running   1                2d22h
+argocd-applicationset-controller-84549767db-ss2xg   0/1     Error     54 (8m11s ago)   2d22h
+argocd-dex-server-6cc5dd7c9d-2vplc                  1/1     Running   1                2d22h
+argocd-notifications-controller-57d4c66f69-79p4b    1/1     Running   1                2d22h
+argocd-redis-c55679569-p5hfq                        1/1     Running   1                2d22h
+argocd-repo-server-7f9fdfbb74-4hpf6                 1/1     Running   1                2d22h
+argocd-server-5f785dd555-84mzj                      1/1     Running   1                2d22h
+
+
+
+The failing applicationset-controller is the same missing optional ApplicationSet CRD issue we discussed. It does not prevent ordinary Application resources or the UI from working.
+
+Start the UI:
+
+kubectl port-forward service/argocd-server -n argocd 8443:443
+
+Open:
+
+https://127.0.0.1:8443
+
+admin - is user
+
+adn retrieve a password use:
+
+$passwordBase64 = kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}"
+
+and loging and see what exacly ArgoCD is manages at the moment 
+You will see it is not our todays green blue app
+
+as well cmd says it manages old:
+
+PS D:\Projects\projectXXX> kubectl get applications -n argocd
+NAME          SYNC STATUS   HEALTH STATUS
+medical-api   Synced        Healthy
+
+as well Then check whether any Application targets medical-bluegreen:(not what we see)
+
+PS D:\Projects\projectXXX> kubectl get applications -n argocd `
+>>   -o custom-columns="APP:.metadata.name,NAMESPACE:.spec.destination.namespace,PATH:.spec.source.path,BRANCH:.spec.source.targetRevision"
+APP           NAMESPACE        PATH               BRANCH
+medical-api   medical-argocd   helm/medical-api   main
+
+Conslusion:
+
+This confirms it:
+
+Argo CD manages the older medical-api application.
+It tracks the main branch.
+It deploys into medical-argocd.
+It does not manage today’s medical-bluegreen namespace or Helm release.
+
+Today’s blue-green deployment is currently managed directly by Helm.
+
+/////////////////////////////////////////////////////////////////////
+
+The next step is to confirm your feature branch is committed and pushed:
+
+PS D:\Projects\projectXXX> git branch --show-current
+feature/blue-green-rollout
+PS D:\Projects\projectXXX> git status
+On branch feature/blue-green-rollout
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   app-FastApi bluegreen deployment
+        modified:   helm/medical-api/Chart.yaml
+        modified:   helm/medical-api/templates/configmap.yaml
+        deleted:    helm/medical-api/templates/deployment.yaml
+        modified:   helm/medical-api/templates/hpa.yaml
+        modified:   helm/medical-api/templates/service.yaml
+        modified:   helm/medical-api/values.yaml
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        -o
+        helm/medical-api/templates/rollout.yaml
+
+no changes added to commit (use "git add" and/or "git commit -a")
+PS D:\Projects\projectXXX> git log -1 --oneline
+14737bd (HEAD -> feature/blue-green-rollout, origin/main, origin/HEAD, main) Add initial BlueGreen rollout planning notes
+
+Your blue-green changes are still local and Argo CD cannot see them yet. Before committing, inspect two suspicious entries:
+
+modified: app-FastApi bluegreen deployment
+untracked: -o
+

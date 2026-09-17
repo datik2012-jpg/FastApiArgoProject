@@ -1,5 +1,5 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 
 metadata:
   name: {{ include "medical-api.fullname" . }}
@@ -8,6 +8,13 @@ metadata:
 
 spec:
   replicas: {{ .Values.replicaCount }}
+
+  strategy:
+    blueGreen:
+      activeService: {{ include "medical-api.fullname" . }}-active
+      previewService: {{ include "medical-api.fullname" . }}-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
 
   selector:
     matchLabels:

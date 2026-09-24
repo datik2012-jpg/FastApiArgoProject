@@ -1,0 +1,278 @@
+Target architecture
+Component	Scaling
+Medical API producer	1–3 replicas
+Kafka broker	3 fixed replicas
+Kafka topic partitions	6
+Kafka replication factor	3
+Minimum in-sync replicas	2
+Consumer	1–3 replicas
+Elasticsearch	1 local development node
+Kibana	1 replica
+
+Kafka brokers should normally be a fixed three-node StatefulSet, not managed by HPA. Producer and consumer workloads can scale automatically.
+
+Phase 1 — Persistent appointments
+
+Replace the Python in-memory list with PostgreSQL.
+
+Create tables:
+
+appointments
+outbox_events
+processed_events
+
+The API transaction will save both the appointment and its outgoing event:
+
+Database transaction
+├── INSERT appointment
+└── INSERT outbox event
+
+This prevents the situation where an appointment is saved but its Kafka event is lost.
+
+Phase 2 — Three-broker Kafka cluster
+
+Install one Kafka cluster containing three broker Pods:
+
+kafka-0
+kafka-1
+kafka-2
+
+Use KRaft mode, without ZooKeeper.
+
+Create the topic:
+
+appointment-events
+
+Configuration:
+
+partitions:          6
+replication-factor:  3
+min.insync.replicas: 2
+
+Six partitions allow up to three consumers to work in parallel while leaving room for future scaling.
+
+We will verify:
+
+Topic creation.
+Partition distribution between brokers.
+Leader and replica placement.
+Continued operation after one broker is stopped.
+Phase 3 — Producer scaling
+
+Every Medical API Pod acts as a Kafka producer.
+
+Configure Kubernetes:
+
+replicaCount: 1
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+
+For Kafka producer reliability:
+
+acks=all
+enable.idempotence=true
+
+The message key will be appointment_id, ensuring that all events for the same appointment enter the same partition in order.
+
+Test:
+
+Start with one API Pod.
+Generate load.
+Scale to three Pods.
+Confirm all three publish events.
+Confirm no ordering errors for the same appointment.
+Phase 4 — Consumer service
+
+Create a separate Python worker:
+
+consumer/
+├── main.py
+├── kafka_consumer.py
+├── elasticsearch_client.py
+├── requirements.txt
+└── Dockerfile
+
+All consumer replicas belong to one group:
+
+appointment-indexers
+
+Scaling configuration:
+
+minReplicas: 1
+maxReplicas: 3
+
+For production-style scaling, use Kafka consumer lag through KEDA:
+
+Large Kafka lag → scale consumers toward 3
+Small/no lag    → scale consumers toward 1
+
+With three consumers, Kafka distributes the six partitions among them.
+
+Phase 5 — Elasticsearch and Kibana
+
+The consumer writes appointment events into Elasticsearch.
+
+Index:
+
+medical-appointment-events
+
+Kibana dashboards will show:
+
+Events per minute.
+Created, updated and cancelled appointments.
+Events by doctor.
+Consumer errors.
+Kafka processing delay.
+Duplicate events.
+Producer and consumer Pod identity.
+Phase 6 — Delivery semantics laboratory
+
+We will implement and test three modes separately.
+
+1. At-most-once
+
+Flow:
+
+Receive message
+→ commit Kafka offset
+→ process message
+
+If the consumer crashes after committing but before processing, the message is lost.
+
+Expected result:
+
+Duplicates: unlikely
+Message loss: possible
+
+This is appropriate only when losing occasional data is acceptable, such as noncritical telemetry.
+
+2. At-least-once
+
+Flow:
+
+Receive message
+→ process and save it
+→ commit Kafka offset
+
+If the consumer crashes after saving but before committing, Kafka sends the message again.
+
+Expected result:
+
+Message loss: avoided
+Duplicates: possible
+
+This will be our normal consumer mode.
+
+To make retries safe, every event receives a unique ID:
+
+{
+  "event_id": "9fb2...",
+  "event_type": "appointment.created"
+}
+
+The consumer checks processed_events or uses event_id as the Elasticsearch document ID. A duplicate then updates the existing document instead of creating another one.
+
+3. Exactly-once
+
+Kafka can provide strict exactly-once processing for a Kafka-to-Kafka transaction:
+
+Read input event
+→ produce output event
+→ commit output and input offset in one Kafka transaction
+
+Configuration includes:
+
+enable.idempotence=true
+transactional.id=<unique-per-producer>
+isolation.level=read_committed
+
+However, Kafka cannot create one atomic transaction covering Kafka, PostgreSQL and Elasticsearch by itself.
+
+For external databases, we will implement effectively-once behavior using:
+
+Transactional outbox.
+Unique event_id.
+Idempotent consumer.
+Database uniqueness constraint.
+Elasticsearch document ID equal to event_id.
+
+This distinction is valuable in interviews:
+
+Kafka exactly-once applies to Kafka transactions. With external systems, we normally design idempotent, effectively-once processing.
+
+Phase 7 — Failure tests
+
+We will deliberately test:
+
+Kill one producer during publishing.
+Kill one consumer before offset commit.
+Kill one consumer after processing but before commit.
+Stop one Kafka broker.
+Restart all three consumers.
+Replay old events.
+Send the same event_id multiple times.
+Generate enough messages to create consumer lag.
+Observe consumer scaling from one to three.
+Confirm Elasticsearch contains no unwanted duplicates.
+Phase 8 — GitHub Actions
+
+CI will:
+
+Run API and consumer tests.
+Run Kafka integration tests.
+Run helm lint.
+Run helm template.
+Build API and consumer images.
+Push images to GHCR.
+Scan images.
+Update Helm image tags through Git.
+Phase 9 — Argo CD and blue-green delivery
+
+Argo CD will manage:
+
+Medical API producer.
+Consumer deployment.
+Kafka manifests/operator configuration.
+Elasticsearch and Kibana configuration.
+PostgreSQL resources for local development.
+
+Argo Rollouts will deploy a new Medical API preview. Preview tests must confirm:
+
+Database connectivity.
+Kafka publishing.
+Consumer processing.
+Elasticsearch indexing.
+Health and readiness endpoints.
+
+Only afterward will we promote it to active.
+
+Phase 10 — Monitoring
+
+Datadog or Prometheus will monitor:
+
+Kafka broker health.
+Under-replicated partitions.
+Consumer lag.
+Producer error rate.
+Consumer processing rate.
+Failed and retried events.
+API latency and errors.
+Elasticsearch indexing failures.
+Kubernetes Pod restarts.
+Local resource warning
+
+Three Kafka brokers plus PostgreSQL, Elasticsearch, Kibana, Argo CD and application replicas may be heavy for your 16 GB machine.
+
+We’ll normally run:
+
+1 producer + 3 brokers + 1 consumer
+
+For the scaling demonstration, temporarily run:
+
+3 producers + 3 brokers + 3 consumers
+
+Then scale back down. The first implementation step should be PostgreSQL plus the transactional outbox, because reliable Kafka delivery depends on having persistent application data.
+

@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     app_name: str = "Medical Appointment API"
     app_version: str = "1.0.0"
     environment: str = "development"
+    kafka_bootstrap_servers: str = "localhost:19092,localhost:19093,localhost:19094"
+    kafka_topic: str = "appointments"
+    database_url: str
+    kafka_consumer_group: str = "appointment-indexers"
 
     model_config = SettingsConfigDict(
         env_file=".env",

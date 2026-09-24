@@ -1,7 +1,8 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AppointmentStatus(str, Enum):
@@ -17,6 +18,12 @@ class AppointmentCreate(BaseModel):
     reason: str = Field(min_length=2, max_length=500)
 
 
+# class Appointment(AppointmentCreate):
+#     id: int
+#     status: AppointmentStatus = AppointmentStatus.scheduled
+    
 class Appointment(AppointmentCreate):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    status: AppointmentStatus = AppointmentStatus.scheduled
+    status: AppointmentStatus = AppointmentStatus.scheduled    

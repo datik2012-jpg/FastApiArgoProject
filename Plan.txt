@@ -11,6 +11,7 @@ Terraform
 Kubernetes
 Helm
 Argo CD
+BlueGreen Deployement
 GitHub Actions
 Azure Key Vault
 Datadog
@@ -625,3 +626,63 @@ k8s/
 Send the output of:
 
 kubectl get nodes -  to see nodes (and understand where will ne runnin ur cluster)
+
+
+////////////////////////////I deployed to Azure AKS//////////
+
+
+///////////////////////////I deployed BlueGreen version ,one time with Helm, and second time used ArgoCD (so from github repo) /////////////
+
+/////////////////////////////Git Hub Actions //
+
+
+GitHub Actions would automate everything that currently happens before Argo CD.
+
+The responsibility is divided like this:
+
+Tool	Responsibility
+GitHub Actions	Test code, build image, validate Helm, publish image
+Argo CD	Detect the desired version in Git and deploy it
+Argo Rollouts	Create preview Pod and perform blue-green promotion
+
+The complete flow would become:
+
+For example, instead of manually doing:
+
+docker build -t medical-api:1.0.3 .
+docker tag ...
+docker push ...
+
+GitHub Actions could automatically:
+
+Run your Python tests.
+Run helm lint.
+Render the chart using helm template.
+Build a uniquely tagged image:
+ghcr.io/datik2012-jpg/medical-api:<git-commit-sha>
+Push it to GitHub Container Registry.
+Update the image tag in values.yaml, usually through a controlled commit or pull request.
+Let Argo CD deploy it as the preview version.
+Keep production traffic on the old version until you approve promotion.
+
+A unique Git commit tag is better than repeatedly using 1.0.2, because we can identify exactly which source code created every Pod.
+
+Important for our current setup: GitHub-hosted Actions cannot place an image directly into your local Docker Desktop image store. Our chart currently uses:
+
+repository: medical-api
+pullPolicy: Never
+
+For GitHub Actions, we should change it to a registry image:
+
+image:
+  repository: ghcr.io/datik2012-jpg/medical-api
+  tag: "<version-or-commit>"
+  pullPolicy: IfNotPresent
+
+Then Docker Desktop Kubernetes can download the image from GHCR. We can use GHCR now because the Azure ACR was deleted to avoid charges.
+
+The next practical stage would be creating:
+
+.github/workflows/ci.yaml
+
+Initially it should only run tests, helm lint, and helm template. After that succeeds, we can add Docker build and GHCR publishing. This separation makes troubleshooting much easier.

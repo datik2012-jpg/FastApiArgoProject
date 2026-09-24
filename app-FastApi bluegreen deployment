@@ -1597,3 +1597,227 @@ kubectl get rollout medical-api-bluegreen -n medical-bluegreen
 PS D:\GitHub\FastApiArgoProject> kubectl get rollout medical-api-bluegreen -n medical-bluegreen
 NAME                    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
 medical-api-bluegreen   1         1         1            1           3h34m
+
+You can also open medical-api-bluegreen in the Argo CD UI. Its resource tree should show:
+
+Rollout
+Active Service
+Preview Service
+ConfigMap
+HPA
+ReplicaSet and Pod
+
+Save the new Application YAML in Git:
+
+git add argocd/medical-api-bluegreen-application.yaml
+git commit -m "Add Argo CD application for blue-green deployment"
+git push
+
+PS D:\GitHub\FastApiArgoProject> git status
+On branch feature/blue-green-rollout
+Your branch is up to date with 'origin/feature/blue-green-rollout'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   app-FastApi bluegreen deployment
+
+no changes added to commit (use "git add" and/or "git commit -a")
+
+Argo CD ui is showing new app running medical-api-bluegreen   !!!!!!
+
+///////////////////////////////////////////////////////
+
+The next step is a proper GitOps blue-green test:
+
+Prepare version 1.0.3.
+Push the change to the feature branch.
+Let Argo CD deploy the preview version.
+Test the preview Service.
+Promote 1.0.3 to active without using helm upgrade.
+
+Steps:
+
+To give your existing Docker image a new tag, for example 1.0.3:
+docker tag medical-api:1.0.2 medical-api:1.0.3
+
+check the images : docker image list - you should see there new medical-api:1.0.3
+This creates another tag for the same image. If you changed application code, build a new image instead:
+
+docker build -t medical-api:1.0.3 .
+
+
+
+Then update helm/medical-api/values.yaml:
+
+
+Then update helm/medical-api/values.yaml:
+image:
+  repository: medical-api
+  tag: "1.0.3"
+  pullPolicy: Never
+For consistent Helm metadata, also update Chart.yaml:
+appVersion: "1.0.3"
+Changing the tag locally doesn’t deploy it—you’ll deploy through Helm or Argo CD afterward.
+Nothing executed or changed.
+
+
+
+Push the change to the feature branch.
+
+PS D:\GitHub\FastApiArgoProject> git add -A
+warning: in the working copy of 'helm/medical-api/Chart.yaml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'helm/medical-api/values.yaml', LF will be replaced by CRLF the next time Git touches it
+PS D:\GitHub\FastApiArgoProject> git commit -m "Add Argo CD application for blue-green deployment - new image version 1.0.3"
+[feature/blue-green-rollout df0b6a1] Add Argo CD application for blue-green deployment - new image version 1.0.3
+ 3 files changed, 102 insertions(+), 2 deletions(-)
+PS D:\GitHub\FastApiArgoProject> git push
+Enumerating objects: 13, done.
+Counting objects: 100% (13/13), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (6/6), done.
+Writing objects: 100% (7/7), 1.72 KiB | 879.00 KiB/s, done.
+Total 7 (delta 5), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (5/5), completed with 5 local objects.
+To https://github.com/datik2012-jpg/FastApiArgoProject.git
+   8c0f3c4..df0b6a1  feature/blue-green-rollout -> feature/blue-green-rollout
+
+
+
+Next step: Let Argo CD deploy the preview version.  (means new version)
+
+we do not have this autosync in the yaml so we can do manualy from ArgoCD UI:
+
+Yes, you can enable it from the Argo CD UI:
+
+Open Applications.
+Select medical-api-bluegreen.
+Click App Details.
+Find Sync Policy.
+Click Enable Auto-Sync.
+Enable:
+Prune Resources
+Self Heal
+Confirm/save.
+
+Then verify from PowerShell:
+
+kubectl get application medical-api-bluegreen -n argocd `
+  -o jsonpath="{.spec.syncPolicy.automated}"
+
+Expected:
+
+{"prune":true,"selfHeal":true}
+
+
+After you may see SUSPEND ROLLOUT || in the ArgoCD UI
+which meaning the rollout is waiting to be rolled after my confirmations so
+we might need opend url and endpoints and do our tests and only if all fine we can complete rollout (why this happen cause we have : autoPromotionEnabled: false):
+
+
+Suspended here is expected. It means the blue-green Rollout is paused and waiting for your approval before switching production traffic to the new Pod.
+
+This happens because your Rollout contains:
+
+autoPromotionEnabled: false
+
+Your screenshot shows two revisions:
+
+rev:2 — currently active/old version.
+rev:3 — new preview version.
+The pause icon — Argo Rollouts is waiting for manual promotion.
+
+This is exactly the blue-green behavior we wanted. It is not an error.
+
+Check which Pod each Service points to:
+
+kubectl get endpointslice -n medical-bluegreen `
+  -l kubernetes.io/service-name=medical-api-bluegreen-active `
+  -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{'\n'}{end}"
+kubectl get endpointslice -n medical-bluegreen `
+  -l kubernetes.io/service-name=medical-api-bluegreen-preview `
+  -o jsonpath="{range .items[*].endpoints[*]}PREVIEW: {.targetRef.name}{'\n'}{end}"
+
+  PS D:\GitHub\FastApiArgoProject> kubectl get application medical-api-bluegreen -n argocd `
+>>   -o jsonpath="{.spec.syncPolicy.automated}"
+PS D:\GitHub\FastApiArgoProject> kubectl get endpointslice -n medical-bluegreen `
+>>   -l kubernetes.io/service-name=medical-api-bluegreen-active `
+>>   -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{'\n'}{end}"
+ACTIVE: medical-api-bluegreen-5db8fbddc7-rntzc
+PS D:\GitHub\FastApiArgoProject> kubectl get endpointslice -n medical-bluegreen `
+>>   -l kubernetes.io/service-name=medical-api-bluegreen-preview `
+>>   -o jsonpath="{range .items[*].endpoints[*]}PREVIEW: {.targetRef.name}{'\n'}{end}"
+PREVIEW: medical-api-bluegreen-694ff8f84d-r9s9j
+
+Test the preview separately:
+
+kubectl port-forward service/medical-api-bluegreen-preview `
+  -n medical-bluegreen `
+  8083:80
+
+Open:
+
+http://127.0.0.1:8083/docs
+
+Keep the active version available through another terminal:
+
+kubectl port-forward service/medical-api-bluegreen-active `
+  -n medical-bluegreen `
+  8082:80
+
+Only after preview testing succeeds should you promote it:
+
+kubectl argo rollouts promote medical-api-bluegreen `
+  -n medical-bluegreen
+
+After promotion, the active Service switches to the new Pod. The old Pod remains temporarily according to scaleDownDelaySeconds, then is removed.
+
+S D:\GitHub\FastApiArgoProject> kubectl argo rollouts promote medical-api-bluegreen 
+>>   -n medical-bluegreen
+error: unknown command "argo" for "kubectl"
+
+The command failed because only the Argo Rollouts controller is installed in Kubernetes. The optional local Windows kubectl plugin is not installed. Your rollout is not damaged.
+
+The easiest option now is the Argo CD UI:
+
+Open medical-api-bluegreen.
+Click the medical-api-bluegreen Rollout box—the one marked R.
+Open the Actions menu.
+Select Promote.
+Confirm promotion.
+
+Do not select Promote Full unless you intentionally want to skip all remaining pauses and analysis.
+
+
+The easiest option now is the Argo CD UI:
+
+Open medical-api-bluegreen.
+Click the medical-api-bluegreen Rollout box—the one marked R.
+Open the Actions menu.
+Select Promote.
+Confirm promotion.
+
+Do not select Promote Full (in my ArgoCD ui on Promote Full option) unless you intentionally want to skip all remaining pauses and analysis.
+
+
+Validation rollout:
+
+PS D:\GitHub\FastApiArgoProject> kubectl get rollout medical-api-bluegreen -n medical-bluegreen
+NAME                    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+medical-api-bluegreen   1         1         1            1           4h12m
+PS D:\GitHub\FastApiArgoProject> kubectl get pods -n medical-bluegreen
+NAME                                     READY   STATUS    RESTARTS   AGE
+medical-api-bluegreen-694ff8f84d-r9s9j   1/1     Running   0          17m
+
+Check where active traffic points:
+
+kubectl get endpointslice -n medical-bluegreen `
+  -l kubernetes.io/service-name=medical-api-bluegreen-active `
+  -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{'\n'}{end}"
+
+  PS D:\GitHub\FastApiArgoProject> kubectl get endpointslice -n medical-bluegreen `
+>>   -l kubernetes.io/service-name=medical-api-bluegreen-active `
+>>   -o jsonpath="{range .items[*].endpoints[*]}ACTIVE: {.targetRef.name}{'\n'}{end}"
+ACTIVE: medical-api-bluegreen-694ff8f84d-r9s9j
+
+After promotion, the active Service switches to the new Pod. The old Pod remains temporarily according to scaleDownDelaySeconds, then is removed.

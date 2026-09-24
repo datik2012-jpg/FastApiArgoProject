@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: medical
+      POSTGRES_PASSWORD: local_dev_password
+      POSTGRES_DB: medical
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medical -d medical"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka-1:
+    image: apache/kafka:4.1.1
+    hostname: kafka-1
+    ports:
+      - "127.0.0.1:19092:9092"
+    environment: &kafka-environment
+      CLUSTER_ID: "mEd1caLkRaFtLab00000001"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"
+      KAFKA_LISTENERS: "INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
+      KAFKA_NUM_PARTITIONS: "3"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "3"
+      KAFKA_MIN_INSYNC_REPLICAS: "2"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "2"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NODE_ID: 1
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-1:29092,EXTERNAL://localhost:19092"
+    volumes:
+      - kafka_1_data:/var/lib/kafka/data
+    healthcheck: &kafka-healthcheck
+      test: ["CMD-SHELL", "KAFKA_HEAP_OPTS='-Xms64m -Xmx128m' /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 60s
+
+  kafka-2:
+    image: apache/kafka:4.1.1
+    hostname: kafka-2
+    ports:
+      - "127.0.0.1:19093:9092"
+    environment:
+      <<: *kafka-environment
+      KAFKA_NODE_ID: 2
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-2:29092,EXTERNAL://localhost:19093"
+    volumes:
+      - kafka_2_data:/var/lib/kafka/data
+    healthcheck: *kafka-healthcheck
+
+  kafka-3:
+    image: apache/kafka:4.1.1
+    hostname: kafka-3
+    ports:
+      - "127.0.0.1:19094:9092"
+    environment:
+      <<: *kafka-environment
+      KAFKA_NODE_ID: 3
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-3:29092,EXTERNAL://localhost:19094"
+    volumes:
+      - kafka_3_data:/var/lib/kafka/data
+    healthcheck: *kafka-healthcheck
+
+volumes:
+  postgres_data:
+  kafka_1_data:
+  kafka_2_data:
+  kafka_3_data:

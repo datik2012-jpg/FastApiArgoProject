@@ -1,0 +1,903 @@
+Create docker compose with postgres + start it
+
+test the it works from the terminal: python -c "from sqlalchemy import text; from app.api.database import engine; connection = engine.connect(); print(connection.execute(text('SELECT current_database(), current_user')).one()); connection.close()"
+
+after db_models added run definition load:
+
+python -c "from app.api.db_models import Base; print(list(Base.metadata.tables))"    
+output:                                                                                          
+['appointments', 'outbox_events'] 
+
+Note:This only loads the definitions—it doesn’t connect to PostgreSQL or create tables
+
+check again after we have added db_models:
+
+(.venv) PS D:\GitHub\FastApiArgoProject> python -c "from app.api.db_models import Base; print(list(Base.metadata.tables))"
+['appointments', 'outbox_events']
+
+
+Init migrations: python -m alembic init migrations
+
+
+This creates:
+FastApiArgoProject/
+├── alembic.ini
+└── migrations/
+    ├── env.py
+    ├── README
+    ├── script.py.mako
+    └── versions/
+
+alembic.ini contains Alembic’s configuration.
+migrations/env.py will connect Alembic to our database and table definitions.
+migrations/versions/ will hold versioned changes, such as “create appointments and outbox tables.”
+
+
+
+pen migrations/env.py and make these three changes.
+1. Add these imports near the top:
+from app.api.config import get_settings
+from app.api.db_models import Base
+Importing Base through db_models also loads the appointment and outbox table definitions.
+2. Immediately after this existing line:
+config = context.config
+Add:
+settings = get_settings()
+
+config.set_main_option(
+    "sqlalchemy.url",
+    settings.database_url.replace("%", "%%"),
+)
+This lets Alembic use the same .env database URL as your API. The replacement escapes % characters for Alembic’s configuration parser.
+You don’t need to put your real credentials into alembic.ini.
+3. Find:
+target_metadata = None
+Replace it with:
+target_metadata = Base.metadata
+Base.metadata describes the tables we want. Alembic compares that description with the actual database to generate a migration.
+Save the file, then run:
+python -m alembic revision --autogenerate -m "create appointments and outbox tables"
+This connects to PostgreSQL and generates a migration file under migrations/versions/. It does not create the tables yet.
+
+he file contains two functions:
+- upgrade() creates the tables and index.
+- downgrade() reverses that change by dropping them.
+Now apply the migration:
+python -m alembic upgrade head
+
+
+head means the latest migration. This command actually creates the tables in PostgreSQL.
+Then verify:
+docker compose exec postgres psql -U medical -d medical -c "\dt"
+You should see three tables:
+alembic_version
+appointments
+outbox_events
+alembic_version records which migration has been applied.
+
+(.venv) PS D:\GitHub\FastApiArgoProject> docker compose exec postgres psql -U medical -d medical -c "\dt"   
+             List of relations    
+ Schema |      Name       | Type  |  Owner  
+--------+-----------------+-------+---------
+ public | alembic_version | table | medical
+ public | appointments    | table | medical
+ public | outbox_events   | table | medical
+(3 rows)
+
+////////////////////////////
+
+
+In a new terminal, run:
+python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8001
+After Application startup complete, test from another terminal:
+$healthUrl = 'http://' + '127.0.0.1:8001' + '/health'
+Invoke-RestMethod -Uri $healthUrl -TimeoutSec 10
+If that returns healthy, open the docs using port 8001.
+
+and open http://127.0.0.1:8001/docs   
+
+create one appoingment and wait for success 201 message:
+
+
+{
+  "patient_id": 1,
+  "doctor_name": "Dr. Who",
+  "appointment_time": "2026-09-22T15:08:06.354Z",
+  "reason": "legs and hands"
+}
+
+
+
+
+Response body
+Download
+{
+  "patient_id": 1,
+  "doctor_name": "Dr. Who",
+  "appointment_time": "2026-09-22T15:08:06.354000Z",
+  "reason": "legs and hands",
+  "id": 1,
+  "status": "scheduled"
+}
+
+Validate from Powershell:
+
+docker compose exec postgres psql -U medical -d medical -c "SELECT appointment_id, event_type, published_at FROM outbox_events WHERE appointment_id = 1;"
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec postgres psql -U medical -d medical -c "SELECT appointment_id, event_type, published_at FROM outbox_events WHERE appointment_id = 1;"
+ appointment_id |     event_type      | published_at
+----------------+---------------------+--------------
+              1 | appointment.created |
+(1 row)
+
+
+Confirmed: appointment 1 has an appointment.created outbox event. Empty published_at is expected because we haven’t connected Kafka yet.
+
+
+try Get Appoinment by id:
+
+	Name	Description
+appointment_id = 1
+
+
+Response body
+Download
+{
+  "patient_id": 1,
+  "doctor_name": "Dr. Who",
+  "appointment_time": "2026-09-22T15:08:06.354000Z",
+  "reason": "legs and hands",
+  "id": 1,
+  "status": "scheduled"
+}
+
+
+
+Next, if this is your disposable test appointment:
+1. Execute DELETE /appointments/1 in Swagger. Expect 204 with no response body.
+
+Code	Description	Links
+204	
+Successful Response
+
+
+2. Execute GET /appointments/1 again. Expect 404.
+
+
+Code	Details
+404
+Undocumented
+Error: Not Found
+
+3. Check the outbox:
+
+PostgreSQL answered in 20.6 ms, so this query is fast.
+
+check from powershell respose time:
+
+docker compose exec postgres psql -U medical -d medical -c "\timing on" -c "SELECT count(*) FROM appointments;"
+
+///////////////////To see all events (created or deleted) //////////
+
+docker compose exec postgres psql -U medical -d medical -c "SELECT event_id, appointment_id, event_type, created_at, published_at FROM outbox_events ORDER BY created_at;"
+
+
+              event_id               | appointment_id |     event_type      |          created_at           | published_at
+--------------------------------------+----------------+---------------------+-------------------------------+--------------
+ ef8b27ec-7dae-4d99-ba72-c67c7963ee5c |              1 | appointment.created | 2026-09-22 15:10:45.100737+00 |
+ 0c2fb457-8283-4986-b174-d7e7f90d9fd1 |              1 | appointment.deleted | 2026-09-22 15:16:08.132277+00 |
+ 2424fc3b-c280-4129-bd7d-8bb2be3965b4 |              2 | appointment.created | 2026-09-22 15:32:09.850779+00 |
+
+I have three outbox events:
+1. Appointment 1 was created.
+2. Appointment 1 was deleted.
+3. Appointment 2 was created.
+
+Check Docker available resources:
+
+
+PS D:\GitHub\FastApiArgoProject> docker info --format 'CPUs: {{.NCPU}} | Memory bytes: {{.MemTotal}}'
+CPUs: 8 | Memory bytes: 8304332800
+PS D:\GitHub\FastApiArgoProject> docker stats --no-stream
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O   PIDS
+9352c9f01e89   fastapiargoproject-postgres-1   0.01%     43.48MiB / 7.734GiB   0.55%     58.1kB / 42.6kB   0B / 56MB   11
+
+
+
+Docker has 8 CPUs and about 7.73 GiB of RAM available. PostgreSQL currently uses about 43 MiB.
+That gives us room to try a small three-broker Kafka lab. We’ll start with:
+- 512 MiB JVM heap per broker, allowing additional memory for Kafka’s other needs.
+- One persistent volume per broker.
+- Combined broker/controller roles for this local KRaft lab.
+- Elasticsearch and Kibana added later, after checking actual resource usage.
+All three brokers will run on your laptop. This lets us test individual broker failures, but it won’t protect against the laptop or Docker stopping.
+Next, we’ll extend compose.yaml with the three Kafka services while preserving PostgreSQL and its data volume.
+
+//////////////How to RUN the project ////////
+
+Start Docker Desktop first
+Start docker compose Postgres DB from powerhsell and the path: D:\GitHub\FastApiArgoProject>  and validate it is running: 
+
+Start PostgreSQL:
+docker compose up -d postgres
+docker compose ps
+
+
+PS D:\GitHub\FastApiArgoProject> docker compose up -d postgres
+[+] up 1/1
+ ✔ Container fastapiargoproject-postgres-1 Started                                                                  0.9s
+PS D:\GitHub\FastApiArgoProject> docker compose ps
+NAME                            IMAGE         COMMAND                  SERVICE    CREATED         STATUS                            PORTS
+fastapiargoproject-postgres-1   postgres:17   "docker-entrypoint.s…"   postgres   3 seconds ago   Up 2 seconds (health: starting)   127.0.0.1:5432->5432/tcp
+
+Once its status shows healthy, check that yesterday’s outbox events are still there:
+
+docker compose exec postgres psql -U medical -d medical -c "SELECT appointment_id, event_type, published_at FROM outbox_events ORDER BY created_at;"
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec postgres psql -U medical -d medical -c "SELECT appointment_id, event_type, published_at FROM outbox_events ORDER BY created_at;"
+ appointment_id |     event_type      | published_at
+----------------+---------------------+--------------
+              1 | appointment.created |
+              1 | appointment.deleted |
+              2 | appointment.created |
+(3 rows)
+
+Before adding the brokers, check today’s Docker resources:
+
+docker info --format 'CPUs: {{.NCPU}} | Memory bytes: {{.MemTotal}}'
+docker stats --no-stream
+
+PS D:\GitHub\FastApiArgoProject> docker info --format 'CPUs: {{.NCPU}} | Memory bytes: {{.MemTotal}}'
+CPUs: 8 | Memory bytes: 8304328704
+PS D:\GitHub\FastApiArgoProject> docker stats --no-stream
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O        BLOCK I/O        PIDS
+77dec51abff1   fastapiargoproject-postgres-1   7.20%     42.11MiB / 7.734GiB   0.53%     1.7kB / 126B   66.9MB / 684kB   6
+
+
+I updated [compose.yaml](D:/GitHub/FastApiArgoProject/compose.yaml) with three Kafka brokers, each with a 512 MiB JVM heap and its own persistent volume. PostgreSQL’s configuration is unchanged. Compose validation passed; the brokers haven’t been started yet.
+
+Run:
+docker compose up -d kafka-1 kafka-2 kafka-3
+The first run downloads the image. After about a minute, check:
+docker compose ps
+
+PS D:\GitHub\FastApiArgoProject> docker ps -a
+CONTAINER ID   IMAGE                COMMAND                  CREATED          STATUS                      PORTS                       NAMES
+c2d32f97dc7e   apache/kafka:4.1.1   "/__cacert_entrypoin…"   23 minutes ago   Up 23 minutes (healthy)     127.0.0.1:19093->9092/tcp   fastapiargoproject-kafka-2-1
+39481b38f75f   apache/kafka:4.1.1   "/__cacert_entrypoin…"   23 minutes ago   Up 23 minutes (healthy)     127.0.0.1:19094->9092/tcp   fastapiargoproject-kafka-3-1
+240ec9a27854   apache/kafka:4.1.1   "/__cacert_entrypoin…"   23 minutes ago   Up 23 minutes (healthy)     127.0.0.1:19092->9092/tcp   fastapiargoproject-kafka-1-1
+77dec51abff1   postgres:17          "docker-entrypoint.s…"   47 minutes ago   Up 47 minutes (healthy)     127.0.0.1:5432
+
+
+All three Kafka brokers and PostgreSQL are healthy.
+Next, verify the Kafka controller quorum:
+docker compose exec kafka-1 /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server kafka-1:29092 describe --status
+Look for:
+- LeaderId: one of 1, 2, or 3.
+- CurrentVoters: all three controller IDs.
+- MaxFollowerLag: ideally 0, meaning the controllers have caught up with the leader.
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec kafka-1 /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server kafka-1:29092 describe --status
+ClusterId:              mEd1caLkRaFtLab00000001
+LeaderId:               2
+LeaderEpoch:            7
+HighWatermark:          3534
+MaxFollowerLag:         0
+MaxFollowerLagTimeMs:   210
+CurrentVoters:          [{"id": 1, "endpoints": ["CONTROLLER://kafka-1:9093"]}, {"id": 2, "endpoints": ["CONTROLLER://kafka-2:9093"]}, {"id": 3, "endpoints": ["CONTROLLER://kafka-3:9093"]}]
+CurrentObservers:       []
+
+/////////////////////Create Appointment TOPIC ///////
+
+Next, create the appointments topic:
+
+docker compose exec kafka-1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --create --if-not-exists --topic appointments --partitions 3 --replication-factor 3 --config min.insync.replicas=2
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec kafka-1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --create --if-not-exists --topic appointments --partitions 3 --replication-factor 3 --config min.insync.replicas=2
+Created topic appointments.
+
+
+You created the appointments topic across all three Kafka containers. You haven’t sent any appointment messages yet.
+Here is what happened:
+1. docker compose exec kafka-1 ran the command inside the kafka-1 container.
+2. --bootstrap-server kafka-1:29092 used kafka-1 as the first connection to the cluster. It does not mean the topic exists only on kafka-1.
+3. Kafka created three partitions—three places where appointment messages can be stored.
+4. Each partition gets a copy on every broker, because you requested three replicas.
+An example of how Kafka could assign the leaders:
+                kafka-1       kafka-2       kafka-3
+Partition 0     LEADER        copy          copy
+Partition 1     copy          LEADER        copy
+Partition 2     copy          copy          LEADER
+Now imagine you send “Appointment 5 created”, and it goes to partition 1:
+- kafka-2 receives it because it leads partition 1 in this example.
+- kafka-1 saves a copy.
+- kafka-3 saves a copy.
+The message belongs to one partition, with copies on all three containers.
+min.insync.replicas=2 means that, when publishing with acks=all, Kafka requires at least two caught-up replicas available to accept writes.
+
+A broker is a running Kafka server. Its job is to receive, store, and deliver messages.
+In your project, each Kafka Docker container runs one broker:
+- Container kafka-1 = broker 1.
+- Container kafka-2 = broker 2.
+- Container kafka-3 = broker 3.
+So when I say “the message is copied to three brokers,” I mean:
+kafka-1 container → stores the message
+kafka-2 container → stores a copy of the same message
+kafka-3 container → stores a copy of the same message
+If the kafka-1 container stops, the message is still stored in kafka-2 and kafka-3.
+For your setup, think “Kafka container” whenever you hear “broker.”
+
+
+For your appointments topic, each broker stores all 3 partitions:
+kafka-1: partition 0, partition 1, partition 2
+kafka-2: partition 0, partition 1, partition 2
+kafka-3: partition 0, partition 1, partition 2
+There are 3 distinct partitions, each stored in 3 copies—so 9 partition copies across the cluster.
+Partition 0 on kafka-1 and partition 0 on kafka-2 are copies of the same partition, not two different partitions.
+
+so when message come from customer A with key 100 it gets to the partition 0 and be copied to kafka 1 and kafka 3 to partition 0 only
+
+
+
+
+
+
+
+2:56 PM
+
+
+
+
+
+
+Yes, exactly—if key 100 maps to partition 0 and kafka-2 is that partition’s leader:
+Customer A → key 100
+                ↓
+       kafka-2: partition 0 (leader)
+                ↓ copies to
+       kafka-1: partition 0
+       kafka-3: partition 0
+The message stays in partition 0 on all three brokers. It does not go into partitions 1 or 2.
+Key 100 is just an example—it doesn’t necessarily map to partition 0.
+
+next message from the same customer A will go to the same partition or not?
+
+
+
+
+
+
+
+2:57 PM
+
+
+
+
+
+
+Yes, if we send it with the same key 100, use the same partitioning method, and keep the partition count unchanged.
+Customer A — key 100:
+  Appointment created → partition 0
+  Appointment updated → partition 0
+  Appointment deleted → partition 0
+This lets Kafka preserve the order in which those events are written to that partition.
+Even if the partition’s leader changes from kafka-2 to kafka-1, the messages still go to partition 0.
+
+
+
+Next, check that the topic’s partitions and replicas are ready:
+docker compose exec kafka-1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --describe --topic appointments
+For each partition (0, 1, 2), look for:
+- Leader: the broker handling writes for that partition.
+- Replicas: the three brokers storing its copies.
+- Isr: the brokers whose copies are caught up. We expect all three.
+
+
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec kafka-1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --describe --topic appointments
+Topic: appointments     TopicId: 0WKKPFzhTqCj3jzstDce8Q PartitionCount: 3       ReplicationFactor: 3    Configs: min.insync.replicas=2
+        Topic: appointments     Partition: 0    Leader: 1       Replicas: 1,2,3 Isr: 1,2,3      Elr:    LastKnownElr:
+        Topic: appointments     Partition: 1    Leader: 2       Replicas: 2,3,1 Isr: 2,3,1      Elr:    LastKnownElr:
+        Topic: appointments     Partition: 2    Leader: 3       Replicas: 3,1,2 Isr: 3,1,2      Elr:    LastKnownElr:
+
+
+and for kafka-2 we can see similar:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec kafka-2 /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --describe --topic appointments
+Topic: appointments     TopicId: 0WKKPFzhTqCj3jzstDce8Q PartitionCount: 3       ReplicationFactor: 3    Configs: min.insync.replicas=2
+        Topic: appointments     Partition: 0    Leader: 1       Replicas: 1,2,3 Isr: 1,2,3      Elr:    LastKnownElr:
+        Topic: appointments     Partition: 1    Leader: 2       Replicas: 2,3,1 Isr: 2,3,1      Elr:    LastKnownElr:
+        Topic: appointments     Partition: 2    Leader: 3       Replicas: 3,1,2 Isr: 3,1,2      Elr:    LastKnownElr:
+PS D:\GitHub\FastApiArgoProject>
+
+
+Your topic is ready. All three partitions have copies on all three brokers, and all copies are in sync:
+- Partition 0: kafka-1 leads.
+- Partition 1: kafka-2 leads.
+- Partition 2: kafka-3 leads.
+Next, send one test message with key 100. Run this in PowerShell:
+
+'100:{"event_type":"test","message":"Hello from customer A"}' | docker compose exec -T kafka-1 /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka-1:29092 --topic appointments --property parse.key=true --property key.separator=: --producer-property acks=all
+
+
+Here, 100 is the key; everything after the first : is the message. A successful producer command usually prints nothing.
+Then read the message:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec -T kafka-1 /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic appointments --from-beginning --max-messages 1 --timeout-ms 15000 --property print.key=true --property print.partition=true
+Partition:0     100     {"event_type":"test","message":"Hello from customer A"}
+Processed a total of 1 messages
+
+and now if we read a message kafka-1 or kafka-2 or kafka-3 our partition we can see it been added to partition 0:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec -T kafka-2 /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic appointments --from-beginning --max-messages 1 --timeout-ms 15000 --property print.key=true --property print.partition=true
+Partition:0     100     {"event_type":"test","message":"Hello from customer A"}
+Processed a total of 1 messages
+
+It worked! You read a message with:
+- Partition: 0
+- Key: 100
+- Message: Hello from customer A
+
+
+You ran the consumer inside kafka-2, but it connected through kafka-1 to discover the cluster. The consumer can read from the appropriate partition leader regardless of which container runs the command.
+This confirms sending and reading a Kafka message works. It hasn’t connected FastAPI to Kafka yet—your database outbox events are still waiting.
+
+
+Correct—reading a Kafka message does not remove it.
+Think of a partition as a book:
+- The message is a line in the book.
+- The consumer’s offset is its bookmark.
+- Reading moves the bookmark; it doesn’t erase the line.
+Other consumers can read the same message, and you can read it again.
+Kafka removes old messages according to the topic’s retention settings, such as how long to keep them—not because someone read them.
+
+so in consumer logic should be - not to read the same message twice or more time?
+
+
+
+Normally, the consumer remembers where it stopped, using a saved offset—a bookmark.
+For example:
+1. Read message at offset 0.
+2. Process it successfully.
+3. Save the bookmark: “Next, read offset 1.”
+When it restarts, it continues from that bookmark.
+But a message can still arrive again:
+1. The consumer processes the message.
+2. It crashes before saving the bookmark.
+3. After restarting, it reads that message again.
+So our consumer should safely handle duplicates. We’ll use each event’s unique event_id to recognize an already-processed event and avoid performing its action twice.
+The rule is: process successfully, then save the offset—and make repeated processing safe.
+
+
+
+////////////////////////////Next step //////////////
+
+
+Next, we’ll build the outbox publisher—a Python worker that sends your saved appointment events to Kafka.
+It will:
+1. Read an outbox event whose published_at is empty.
+2. Send it to the appointments topic.
+3. Wait for Kafka to confirm delivery.
+4. Set published_at in PostgreSQL.
+We’ll use appointment_id as the message key, as your project plan specifies, so events for the same appointment go to the same partition.
+First, install the Kafka Python client in the same Python environment you use for FastAPI:
+
+python -m pip install confluent-kafka
+
+Verify it:
+
+python -c "import confluent_kafka; print(confluent_kafka.version())"
+
+2.15.1
+
+Also add this line to requirements.txt:
+confluent-kafka
+
+
+Next, add these two fields inside the Settings class in app/api/config.py, just below database_url:
+
+
+kafka_bootstrap_servers: str = "localhost:19092,localhost:19093,localhost:19094"
+kafka_topic: str = "appointments"
+
+They tell the publisher:
+- Where to connect: the three Kafka ports exposed to Windows.
+- Where to send events: the appointments topic.
+These addresses work because we’ll initially run the Python publisher on Windows.
+
+Verify the settings from your project root:
+
+python -c "from app.api.config import get_settings; s = get_settings(); print(s.kafka_bootstrap_servers); print(s.kafka_topic)"
+
+can be readen:
+
+PS D:\GitHub\FastApiArgoProject> python -c "from app.api.config import get_settings; s = get_settings(); print(s.kafka_bootstrap_servers); print(s.kafka_topic)"
+localhost:19092,localhost:19093,localhost:19094
+appointments
+
+
+
+Your settings load correctly. Next, test Python’s connection from Windows to Kafka. Our earlier test ran inside Docker.
+Paste this entire block into PowerShell:
+
+Your settings load correctly. Next, test Python’s connection from Windows to Kafka. Our earlier test ran inside Docker.
+Paste this entire block into PowerShell:
+@'
+from confluent_kafka.admin import AdminClient
+from app.api.config import get_settings
+
+settings = get_settings()
+client = AdminClient({
+    "bootstrap.servers": settings.kafka_bootstrap_servers,
+})
+
+metadata = client.list_topics(timeout=10)
+topic = metadata.topics.get(settings.kafka_topic)
+
+if topic is None:
+    raise RuntimeError("Appointments topic was not found")
+if topic.error:
+    raise RuntimeError(str(topic.error))
+
+print("Connected to Kafka")
+print("Brokers:", sorted(metadata.brokers))
+print("Topic:", topic.topic)
+print("Partitions:", sorted(topic.partitions))
+'@ | python -
+
+
+Expected output:
+Connected to Kafka
+Brokers: [1, 2, 3]
+Topic: appointments
+Partitions: [0, 1, 2]
+
+/////////////////////////////
+
+Let’s test it with your existing pending events.
+1. Check which events are waiting:
+
+
+docker compose exec postgres psql -U medical -d medical -c "SELECT appointment_id, event_type, published_at FROM outbox_events ORDER BY created_at;"
+
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec postgres psql -U medical -d medical -c "SELECT appointment_id, event_type, published_at FROM outbox_events ORDER BY created_at;"
+ appointment_id |     event_type      | published_at
+----------------+---------------------+--------------
+              1 | appointment.created |
+              1 | appointment.deleted |
+              2 | appointment.created |
+(3 rows)
+
+An empty published_at means the event is waiting.
+
+4. Run the publisher a second time:
+python -m app.api.outbox_publisher
+
+If no new events were created, expect:
+Published 0 event(s).
+
+
+Published validation:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec postgres psql -U medical -d medical -c "SELECT appointment_id, event_type, published_at FROM outbox_events ORDER BY created_at;"
+ appointment_id |     event_type      |         published_at
+----------------+---------------------+-------------------------------
+              1 | appointment.created | 2026-09-23 14:49:46.46092+00
+              1 | appointment.deleted | 2026-09-23 14:49:46.567989+00
+              2 | appointment.created | 2026-09-23 14:49:46.985429+00
+(3 rows)
+
+It worked—all three events were published.
+
+Read topic to see the actual messages:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec -T kafka-1 /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic appointments --from-beginning --timeout-ms 10000 --property print.key=true --property print.partition=true
+Partition:2     2       {"event_id": "2424fc3b-c280-4129-bd7d-8bb2be3965b4", "appointment_id": 2, "event_type": "appointment.created", "created_at": "2026-09-22T15:32:09.850779+00:00", "payload": {"id": 2, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:0     100     {"event_type":"test","message":"Hello from customer A"}
+Partition:0     1       {"event_id": "ef8b27ec-7dae-4d99-ba72-c67c7963ee5c", "appointment_id": 1, "event_type": "appointment.created", "created_at": "2026-09-22T15:10:45.100737+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:0     1       {"event_id": "0c2fb457-8283-4986-b174-d7e7f90d9fd1", "appointment_id": 1, "event_type": "appointment.deleted", "created_at": "2026-09-22T15:16:08.132277+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+
+It worked—all three events were published.
+- Appointment 1’s creation and deletion → partition 0, offsets 1 and 2.
+- Appointment 2’s creation → partition 2, offset 0.
+
+how can I know where is the offset:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec kafka-1 /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka-1:29092 --topic appointments --time latest
+
+
+Where is offset at the moment in each partition:
+appointments:0:3
+appointments:1:0
+appointments:2:1
+
+To Clarify:
+Partition 0 → appointment 1’s events(id 1) + your test message (id 100)
+Partition 1 → empty
+Partition 2 → appointment 2’s event
+
+/////////////////////////////////////////////////////////////
+
+
+Next, test the full flow with a new appointment.
+1. Start FastAPI if it isn’t running:
+
+python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8001
+
+PS D:\GitHub\FastApiArgoProject> python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8001
+{"timestamp": "2026-09-23T15:08:53.114264+00:00", "level": "INFO", "logger": "medical-api", "message": "application_started"}
+←[32mINFO←[0m:     Started server process [←[36m50624←[0m]
+←[32mINFO←[0m:     Waiting for application startup.
+←[32mINFO←[0m:     Application startup complete.
+
+
+Open http://127.0.0.1:8001/docs. Use POST /appointments → Try it out with:
+
+{
+  "patient_id": 100,
+  "doctor_name": "Dr. Test",
+  "appointment_time": "2026-10-01T10:00:00Z",
+  "reason": "Kafka integration test"
+}
+
+After receiving 201 Created, run the publisher in another terminal:
+python -m app.api.outbox_publisher
+
+PS D:\GitHub\FastApiArgoProject> python -m app.api.outbox_publisher
+Published event bc3aed69-ec30-4032-85ab-7ebabee0af5b: partition=2, offset=1
+Published 1 event(s).
+
+PS D:\GitHub\FastApiArgoProject> python -m app.api.outbox_publisher
+Published event bc3aed69-ec30-4032-85ab-7ebabee0af5b: partition=2, offset=1
+Published 1 event(s).
+PS D:\GitHub\FastApiArgoProject> python -m app.api.outbox_publisher
+Published 0 event(s).
+
+And see all events in Kafka:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec -T kafka-1 /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic appointments --from-beginning --timeout-ms 10000 --property print.key=true --property print.partition=true
+Partition:0     100     {"event_type":"test","message":"Hello from customer A"}
+Partition:0     1       {"event_id": "ef8b27ec-7dae-4d99-ba72-c67c7963ee5c", "appointment_id": 1, "event_type": "appointment.created", "created_at": "2026-09-22T15:10:45.100737+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:0     1       {"event_id": "0c2fb457-8283-4986-b174-d7e7f90d9fd1", "appointment_id": 1, "event_type": "appointment.deleted", "created_at": "2026-09-22T15:16:08.132277+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:2     2       {"event_id": "2424fc3b-c280-4129-bd7d-8bb2be3965b4", "appointment_id": 2, "event_type": "appointment.created", "created_at": "2026-09-22T15:32:09.850779+00:00", "payload": {"id": 2, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:2     3       {"event_id": "bc3aed69-ec30-4032-85ab-7ebabee0af5b", "appointment_id": 3, "event_type": "appointment.created", "created_at": "2026-09-23T15:10:16.967967+00:00", "payload": {"id": 3, "reason": "Kafka integration test", "status": "scheduled", "patient_id": 100, "doctor_name": "Dr. Test", "appointment_time": "2026-09-23T15:09:44.170000Z"}}
+
+
+and check offset now (we see partition 2 got new event  - event_id 3)!!
+
+see offset in partition 2 been updated:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec kafka-1 /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka-1:29092 --topic appointments --time latest
+appointments:0:3
+appointments:1:0
+appointments:2:2
+
+
+Forget the consumer for a moment. Offset is just the number Kafka gives a message when storing it.
+Your publisher sent an event. Kafka replied:
+“I saved your event in partition 0, at position 2.”
+
+That is why your code printed:
+partition=0, offset=2
+
+Again I looked appointment in the kafka (all events):
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec -T kafka-1 /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic appointments --from-beginning --timeout-ms 10000 --property print.key=true --property print.partition=true --property print.offset=true
+Partition:0     Offset:0        100     {"event_type":"test","message":"Hello from customer A"}
+Partition:0     Offset:1        1       {"event_id": "ef8b27ec-7dae-4d99-ba72-c67c7963ee5c", "appointment_id": 1, "event_type": "appointment.created", "created_at": "2026-09-22T15:10:45.100737+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:0     Offset:2        1       {"event_id": "0c2fb457-8283-4986-b174-d7e7f90d9fd1", "appointment_id": 1, "event_type": "appointment.deleted", "created_at": "2026-09-22T15:16:08.132277+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:2     Offset:0        2       {"event_id": "2424fc3b-c280-4129-bd7d-8bb2be3965b4", "appointment_id": 2, "event_type": "appointment.created", "created_at": "2026-09-22T15:32:09.850779+00:00", "payload": {"id": 2, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:2     Offset:1        3       {"event_id": "bc3aed69-ec30-4032-85ab-7ebabee0af5b", "appointment_id": 3, "event_type": "appointment.created", "created_at": "2026-09-23T15:10:16.967967+00:00", "payload": {"id": 3, "reason": "Kafka integration test", "status": "scheduled", "patient_id": 100, "doctor_name": "Dr. Test", "appointment_time": "2026-09-23T15:09:44.170000Z"}}
+
+Swagger → FastAPI → PostgreSQL outbox → publisher → Kafka
+
+/////////////////////////////////////////////////////////////////////////////
+
+Next is a Python consumer. We’ll start small: it will read an event, print its ID and type, then save its reading position in Kafka.
+Unlike your console command with --from-beginning, this consumer will use a fixed consumer group so it can resume from its saved position after restarting.
+
+/////////////////////////////////////////// Python Consumer part /////////
+
+In your project, the appointments topic has three partitions. Suppose we run three Python consumers, all using:
+kafka_consumer_group = "appointment-indexers"
+Kafka could assign the work like this:
+- Consumer A reads partition 0.
+- Consumer B reads partition 1.
+- Consumer C reads partition 2.
+Each partition is assigned to one consumer within that group at a time. With only one consumer running, it reads all three partitions.
+
+The group also has saved reading positions, called committed offsets. For example, after processing an event at offset 4 in partition 0, the consumer saves offset 5 as the next position. When it restarts using the same group name, it can resume there.
+
+
+Note:
+More precisely, the saved pointer belongs to the consumer group:
+- Kafka’s end position: 5 → events have been written at offsets 0–4.
+- Group’s saved pointer: 3 → next read starts at offset 3; events 3 and 4 remain.
+When our consumer restarts with the same group name, it resumes from that saved pointer.
+
+Yes, that’s correct—with one detail about starting:
+- Partition’s end position → the next offset for a new event.
+- Consumer’s reading position → the next event to read.
+A new consumer group starts at the earliest available event if configured with auto.offset.reset="earliest". With "latest", it starts at the end and waits for new events.
+
+So in conclusion when we add event to the partition offset moves forward and points on the next free place to put next event
+Consumer has his own pointer ,and when reads event it updates next position to read.
+The option to put consumer pointer to earliest (start from the start of partition) 
+or from the latest (so it start from the end and wait for event)
+
+
+Next, create an empty file:
+app/api/consumer.py
+Add these imports:
+import json
+
+from confluent_kafka import Consumer
+
+from .config import get_settings
+- json converts the event’s JSON into a Python dictionary.
+- Consumer is the Kafka client that reads events.
+- get_settings loads our broker addresses, topic, and group name.
+
+
+Now add this below the imports in app/api/consumer.py:
+def main():
+    settings = get_settings()
+
+    consumer = Consumer({
+        "bootstrap.servers": settings.kafka_bootstrap_servers,
+        "group.id": settings.kafka_consumer_group,
+        "auto.offset.reset": "earliest",
+        "enable.auto.commit": False,
+        "broker.address.family": "v4",
+    })
+This creates our Kafka consumer:
+- bootstrap.servers: addresses of your Kafka brokers.
+- group.id: the group that owns our saved reading positions.
+- auto.offset.reset: starts at the earliest available event when there’s no valid saved position.
+- enable.auto.commit=False: we’ll explicitly save the position after processing each event.
+- broker.address.family: uses IPv4, matching your local Docker setup.
+
+
+
+
+
+Next, tell the consumer which topic to read.
+Add this inside main(), immediately after consumer = Consumer({...}), using the same indentation:
+    consumer.subscribe([settings.kafka_topic])
+This subscribes our consumer to the appointments topic. The brackets form a list because a consumer can subscribe to multiple topics.
+
+
+
+Next, add the reading loop inside main(), directly below consumer.subscribe(...):
+
+Yes. The loop repeatedly calls poll():
+1. If an unread event is available, it returns that event.
+2. Otherwise, it waits up to one second.
+3. If nothing arrives, it returns None, and the loop calls poll() again.
+So the consumer keeps running, reading existing unread events and waiting for new ones.
+
+
+
+if __name__ == "__main__":
+    main()
+This starts the consumer when you run:
+python -m app.api.consumer
+Run it from your project folder. It should print existing unread events, then keep waiting for new ones.
+
+
+Start docker compose with kafka and postgressql db container:
+
+cd D:\GitHub\FastApiArgoProject
+docker compose up -d
+
+Check their status:
+docker compose ps
+
+D:\GitHub\FastApiArgoProject> docker compose ps
+NAME                            IMAGE                COMMAND                  SERVICE    CREATED          STATUS                    PORTS
+fastapiargoproject-kafka-1-1    apache/kafka:4.1.1   "/__cacert_entrypoin…"   kafka-1    44 seconds ago   Up 42 seconds (healthy)   127.0.0.1:19092->9092/tcp
+fastapiargoproject-kafka-2-1    apache/kafka:4.1.1   "/__cacert_entrypoin…"   kafka-2    44 seconds ago   Up 42 seconds (healthy)   127.0.0.1:19093->9092/tcp
+fastapiargoproject-kafka-3-1    apache/kafka:4.1.1   "/__cacert_entrypoin…"   kafka-3    44 seconds ago   Up 42 seconds (healthy)   127.0.0.1:19094->9092/tcp
+fastapiargoproject-postgres-1   postgres:17          "docker-entrypoint.s…"   postgres   22 hours ago     Up 42 seconds (healthy)   127.0.0.1:5432->5432/tcp
+PS D:\GitHub\FastApiArgoProject> docker ps -a
+CONTAINER ID   IMAGE                COMMAND                  CREATED              STATUS                        PORTS                              NAMES
+c677617dab6d   apache/kafka:4.1.1   "/__cacert_entrypoin…"   About a minute ago   Up About a minute (healthy)   127.0.0.1:19094->9092/tcp          fastapiargoproject-kafka-3-1
+cf4a64b0b0c1   apache/kafka:4.1.1   "/__cacert_entrypoin…"   About a minute ago   Up About a minute (healthy)   127.0.0.1:19092->9092/tcp          fastapiargoproject-kafka-1-1
+b58317d425c9   apache/kafka:4.1.1   "/__cacert_entrypoin…"   About a minute ago   Up About a minute (healthy)   127.0.0.1:19093->9092/tcp          fastapiargoproject-kafka-2-1
+PS D:\GitHub\FastApiArgoProject>
+
+It starts 4 containers for this project:
+- 3 Kafka brokers: kafka-1, kafka-2, kafka-3.
+- 1 PostgreSQL database: postgres.
+
+Yes—run this to display the events currently stored in appointments:
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec -T kafka-1 /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic appointments --from-beginning --timeout-ms 10000 --property print.key=true --property print.partition=true --property print.offset=true
+Partition:0     Offset:0        100     {"event_type":"test","message":"Hello from customer A"}
+Partition:0     Offset:1        1       {"event_id": "ef8b27ec-7dae-4d99-ba72-c67c7963ee5c", "appointment_id": 1, "event_type": "appointment.created", "created_at": "2026-09-22T15:10:45.100737+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:0     Offset:2        1       {"event_id": "0c2fb457-8283-4986-b174-d7e7f90d9fd1", "appointment_id": 1, "event_type": "appointment.deleted", "created_at": "2026-09-22T15:16:08.132277+00:00", "payload": {"id": 1, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:2     Offset:0        2       {"event_id": "2424fc3b-c280-4129-bd7d-8bb2be3965b4", "appointment_id": 2, "event_type": "appointment.created", "created_at": "2026-09-22T15:32:09.850779+00:00", "payload": {"id": 2, "reason": "legs and hands", "status": "scheduled", "patient_id": 1, "doctor_name": "Dr. Who", "appointment_time": "2026-09-22T15:08:06.354000Z"}}
+Partition:2     Offset:1        3       {"event_id": "bc3aed69-ec30-4032-85ab-7ebabee0af5b", "appointment_id": 3, "event_type": "appointment.created", "created_at": "2026-09-23T15:10:16.967967+00:00", "payload": {"id": 3, "reason": "Kafka integration test", "status": "scheduled", "patient_id": 100, "doctor_name": "Dr. Test", "appointment_time": "2026-09-23T15:09:44.170000Z"}}
+[2026-09-24 08:37:14,613] ERROR Error processing message, terminating consumer process:  (org.apache.kafka.tools.consumer.ConsoleConsumer)
+org.apache.kafka.common.errors.TimeoutException: null
+Processed a total of 5 messages
+
+Next, start our Python consumer:
+
+python -m app.api.consumer
+
+PS D:\GitHub\FastApiArgoProject> python -m app.api.consumer
+Received event 2424fc3b-c280-4129-bd7d-8bb2be3965b4: type=appointment.created
+Received event bc3aed69-ec30-4032-85ab-7ebabee0af5b: type=appointment.created
+Received event unknown: type=test
+Received event ef8b27ec-7dae-4d99-ba72-c67c7963ee5c: type=appointment.created
+Received event 0c2fb457-8283-4986-b174-d7e7f90d9fd1: type=appointment.deleted
+
+
+The consumer read all five events. unknown is expected because the test event has no event_id.
+Partition 2’s events appeared first—that’s fine. Ordering is preserved within each partition, not across partitions.
+Next, verify that it remembers its progress:
+1. Press Ctrl+C to stop it.
+2. Run it again:
+
+
+Outpu is EMPTY cmd still waiting and no events coming cause we read all before and wait for new one:
+
+PS D:\GitHub\FastApiArgoProject> python -m app.api.consumer
+Traceback (most recent call last)
+
+
+//////////////////Leave the consumer running in powershell window////////
+
+PS D:\GitHub\FastApiArgoProject> python -m app.api.consumer
+
+and open another window and run the api:
+
+
+python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8001
+
+open http://127.0.0.1:8001 and see the docs
+
+
+Try to POST appointment:
+
+Select POST /appointments → Try it out, enter:
+
+{
+  "patient_id": 101,
+  "doctor_name": "Dr. Test",
+  "appointment_time": "2026-10-01T10:00:00Z",
+  "reason": "Live consumer test"
+}
+
+and validate in get appointments it existing!!
+
+
+NExt tsep:
+
+In a third terminal, run the publisher from your project folder:
+
+python -m app.api.outbox_publisher
+
+PS D:\GitHub\FastApiArgoProject> python -m app.api.outbox_publisher
+%4|1790240939.397|GETPID|medical-outbox-publisher#producer-1| [thrd:main]: Failed to acquire idempotence PID from broker localhost:19093/2: Broker: Coordinator load in progress: retrying
+Published event c92c7df7-15dc-4742-92c4-afddd8b0bc86: partition=1, offset=0
+Published event f35e7ea3-c641-4a7e-9a63-6f6622a3dbe5: partition=0, offset=3
+Published 2 event(s).
+
+and in first window we can see recieved events:
+
+PS D:\GitHub\FastApiArgoProject> python -m app.api.consumer
+Received event c92c7df7-15dc-4742-92c4-afddd8b0bc86: type=appointment.created
+Received event f35e7ea3-c641-4a7e-9a63-6f6622a3dbe5: type=appointment.created
+
+just look all topic and partitions (there 5-6 but i cut only last two):
+
+PS D:\GitHub\FastApiArgoProject> docker compose exec -T kafka-1 /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic appointments --from-beginning --timeout-ms 10000 --property print.key=true --property print.partition=true --property print.offset=true
+
+Partition:0     Offset:3        5       {"event_id": "f35e7ea3-c641-4a7e-9a63-6f6622a3dbe5", "appointment_id": 5, "event_type": "appointment.created", "created_at": "2026-09-24T09:02:58.439422+00:00", "payload": {"id": 5, "reason": "Live consumer test", "status": "scheduled", "patient_id": 101, "doctor_name": "Dr. Test", "appointment_time": "2026-10-01T10:00:00Z"}}
+Partition:1     Offset:0        4       {"event_id": "c92c7df7-15dc-4742-92c4-afddd8b0bc86", "appointment_id": 4, "event_type": "appointment.created", "created_at": "2026-09-24T09:02:53.931034+00:00", "payload": {"id": 4, "reason": "Live consumer test", "status": "scheduled", "patient_id": 101, "doctor_name": "Dr. Test", "appointment_time": "2026-10-01T10:00:00Z"}}
+
+Your full flow now works:
+FastAPI → PostgreSQL outbox → publisher → Kafka → Python consumer
